@@ -131,6 +131,15 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             contentDescription = "Chiudi applicazione"
             setOnClickListener { requestClose() }
         }
+        val brand = TextView(this).apply {
+            text = "PIT ENGINEER"
+            textSize = 17f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            letterSpacing = .06f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(72, 205, 255))
+            background = hudPanel(Color.rgb(7, 22, 31), Color.rgb(28, 148, 190), 1)
+        }
         dashboard = RaceView().apply {
             onTrackTapped = ::handleTrackTap
         }
@@ -138,6 +147,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(optionsButton, LinearLayout.LayoutParams(dp(58), dp(42)))
+            addView(brand, LinearLayout.LayoutParams(dp(178), dp(42)).apply { setMargins(dp(4), 0, dp(4), 0) })
             addView(status, LinearLayout.LayoutParams(0, dp(42), 1f))
             addView(closeButton, LinearLayout.LayoutParams(dp(48), dp(42)).apply { setMargins(dp(4), 0, 0, 0) })
         }
@@ -152,7 +162,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         startButton = actionButton("AVVIA") { toggleSession() }
         firstControlRow.addView(startButton, controlParams(1f))
         control(firstControlRow, "TRAGUARDO", 1f) { setTimingLineAtCurrentFix() }
-        control(secondControlRow, "INTERMEDIO", 1f) { showMoveSectorMenu() }
+        control(secondControlRow, "SECTOR", 1f) { showMoveSectorMenu() }
         testButton = actionButton("TEST GPS") { toggleSimulation() }
         secondControlRow.addView(testButton, controlParams(1f))
         controls.addView(firstControlRow, LinearLayout.LayoutParams(-1, dp(39)))
@@ -323,7 +333,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         dashboard.setTrack(points)
         trackMap.setTrack(points)
         trackMap.setTimingLine(null)
-        status.text = "$name caricato come riferimento visivo"
+        status.text = "$name caricato come traccia visiva"
     }
 
     private fun pickGpx() {
@@ -443,8 +453,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         sectorReferences = sectorReferences + SectorReference(number, line, referenceElapsed)
         timing.sectors = sectorReferences.map { it.line }
         trackMap.setSectors(timing.sectors)
-        status.text = "Intermedio S$number aggiunto${if (running) " · attivo da questo giro" else ""}"
-        speak("Intermedio $number aggiunto", flush = true)
+        status.text = "Sector S$number aggiunto${if (running) " · attivo da questo giro" else ""}"
+        speak("Settore $number aggiunto", flush = true)
     }
 
     private fun moveSector(number: Int, center: TrackPoint) {
@@ -460,8 +470,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
         timing.sectors = sectorReferences.map { it.line }
         trackMap.setSectors(timing.sectors)
-        status.text = "Intermedio S$number spostato · attivo subito"
-        speak("Intermedio $number spostato", flush = true)
+        status.text = "Sector S$number spostato · attivo subito"
+        speak("Settore $number spostato", flush = true)
     }
 
     private fun elapsedAtLine(samples: List<GpsSample>, line: TimingLine): Long? {
@@ -629,7 +639,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 lastAnnouncedDeltaMs = null
                 previousLiveDeltaMs = null
                 currentSectorTimes.clear()
-                status.text = "Giro armato · riferimento non ancora disponibile"
+                status.text = "Giro armato · BEST LAP non ancora disponibile"
                 speak("Cronometro armato", flush = true)
             }
             is TimingEvent.SectorCompleted -> {
@@ -649,11 +659,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 val deltaPart = delta?.let { ". ${spokenDelta(it)}" } ?: ""
                 if (voiceBriefingMode != VoiceBriefingMode.LAPS_ONLY) {
                     val recordPart = if (isSegmentRecord) ". ${sectorRecordMessage(event.number, segmentMs)}" else ""
-                    speak("Intermedio ${event.number}. ${spokenTime(event.elapsedMs)}$deltaPart$recordPart", flush = true)
+                    speak("Settore ${event.number}. ${spokenTime(event.elapsedMs)}$deltaPart$recordPart", flush = true)
                 }
                 // Sector calls always win over predictive-delta calls, including the samples just after it.
                 deltaAnnouncementsSuppressedUntilMs = (latestFix?.timeMs ?: System.currentTimeMillis()) + 3_000L
-                status.text = "Intermedio ${event.number}: ${formatTime(event.elapsedMs)}${delta?.let { " · ${formatDelta(it)}" } ?: ""}"
+                status.text = "Sector ${event.number}: ${formatTime(event.elapsedMs)}${delta?.let { " · ${formatDelta(it)}" } ?: ""}"
             }
             is TimingEvent.LapCompleted -> {
                 lastLapMs = event.lap.durationMs
@@ -688,11 +698,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     oldBest?.let {
                         // Announce the gap to the record on every completed lap, including a new best.
                         append(" ${spokenDelta(event.lap.durationMs - it.durationMs)} rispetto al record.")
-                    } ?: append(" Riferimento impostato.")
+                    } ?: append(" Best lap impostato.")
                     if (isBest) append(" Miglior giro.")
                     else oldBest?.let {
                         if (event.lap.number - lastBestReminderLap >= 3) {
-                            append(" Riferimento ${spokenTime(it.durationMs)}.")
+                            append(" Best lap ${spokenTime(it.durationMs)}.")
                             lastBestReminderLap = event.lap.number
                         }
                     }
@@ -1115,9 +1125,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             "Delta negativo di $amount",
             "Guadagno di $amount",
             "Stai recuperando $amount",
-            "Riferimento battuto di $amount",
+            "Best lap battuto di $amount",
             "Sei più rapido di $amount",
-            "Hai preso $amount al riferimento",
+            "Hai preso $amount al best lap",
             "Passo migliore di $amount",
             "Vantaggio di $amount",
             "Stai girando $amount più forte",
@@ -1130,13 +1140,13 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             "Hai perso $amount",
             "Ritardo di $amount",
             "Sei più lento di $amount",
-            "Il riferimento si allontana di $amount",
+            "Il best lap si allontana di $amount",
             "Perdi $amount sul giro migliore",
             "Tempo in rosso: $amount",
             "Scarto di $amount",
             "Sei sopra di $amount",
             "Calo di $amount",
-            "Manca $amount al riferimento"
+            "Manca $amount al best lap"
         )
         val index = ((abs(ms) / 10 + elapsedMs / 1_000) % variants.size).toInt()
         return variants[index]
@@ -1153,7 +1163,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             "Il delta migliora di $recovered, resta $current",
             "Riduci lo scarto di $recovered. Delta $current",
             "Buon recupero: $recovered. Delta $current",
-            "Stai tornando verso il riferimento: $recovered recuperati",
+            "Stai tornando verso il best lap: $recovered recuperati",
             "Recuperi $recovered sul giro migliore",
             "Delta in calo di $recovered, ora $current"
         )
@@ -1302,22 +1312,22 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawRoundRect(pad, dp(38).toFloat(), width - pad, dp(98).toFloat(), dp(4).toFloat(), dp(4).toFloat(), panelPaint)
             canvas.drawRect(pad, dp(38).toFloat(), pad + dp(6), dp(98).toFloat(), accentPaint)
             labelPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("DELTA vs RIFERIMENTO", pad + dp(18), dp(58).toFloat(), labelPaint)
+            canvas.drawText("DELTA vs BEST LAP", pad + dp(18), dp(58).toFloat(), labelPaint)
             val deltaText = delta?.let { if (it < 0) "▲ ${formatDelta(it)}" else "▼ ${formatDelta(it)}" } ?: "± 0.00"
             deltaPaint.color = deltaColor
             deltaPaint.textAlign = Paint.Align.LEFT
-            deltaPaint.textSize = dp(34).toFloat()
+            deltaPaint.textSize = dp(42).toFloat()
             canvas.drawText(deltaText, pad + dp(18), dp(91).toFloat(), deltaPaint)
             labelPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("BEST LAP · RIFERIMENTO", width - pad - dp(18), dp(58).toFloat(), labelPaint)
+            canvas.drawText("BEST LAP", width - pad - dp(18), dp(58).toFloat(), labelPaint)
             bestPaint.color = Color.rgb(69, 223, 123)
             bestPaint.textAlign = Paint.Align.RIGHT
-            bestPaint.textSize = dp(29).toFloat()
+            bestPaint.textSize = dp(36).toFloat()
             canvas.drawText(best?.let(::formatTime) ?: "--:--.---", width - pad - dp(18), dp(91).toFloat(), bestPaint)
 
             canvas.drawRect(pad, dp(106).toFloat(), width - pad, dp(128).toFloat(), darkPanelPaint)
             labelPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("INTERMEDIO", pad + dp(12), dp(123).toFloat(), labelPaint)
+            canvas.drawText("SECTOR", pad + dp(12), dp(123).toFloat(), labelPaint)
             labelPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText("TEMPO / DELTA", width - pad - dp(12), dp(123).toFloat(), labelPaint)
             drawTimingRow(canvas, dp(130).toFloat(), "S1", sectorTexts[1] ?: "--:--.---", Color.rgb(70, 205, 255), rowText, valueText, panelPaint)
