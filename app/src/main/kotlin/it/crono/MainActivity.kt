@@ -164,9 +164,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         trackMap = TrackMapView(this, ::handleTrackTap)
         val isPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
         val closeWidth = dp(if (isPortrait) 44 else 48)
-        // The header contents keep their full width; the close control floats above the far right
-        // instead of claiming a fourth column and shifting the information panel.
-        status.setPadding(dp(14), 0, closeWidth + dp(8), 0)
+        // Keep a physical gap before the floating close control: overlapping cyan outlines made
+        // the GPS/status panel look squeezed even though its layout width was unchanged.
+        status.setPadding(dp(14), 0, dp(8), 0)
         val headerContent = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(optionsButton, LinearLayout.LayoutParams(dp(if (isPortrait) 48 else 58), dp(42)))
@@ -174,7 +174,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             addView(status, LinearLayout.LayoutParams(0, dp(42), 1f))
         }
         val header = FrameLayout(this).apply {
-            addView(headerContent, FrameLayout.LayoutParams(-1, dp(42)))
+            addView(headerContent, FrameLayout.LayoutParams(-1, dp(42)).apply { rightMargin = closeWidth + dp(4) })
             addView(closeButton, FrameLayout.LayoutParams(closeWidth, dp(42), Gravity.END or Gravity.TOP))
         }
         root.addView(header, LinearLayout.LayoutParams(-1, dp(42)))
