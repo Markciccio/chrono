@@ -18,6 +18,7 @@ class TimingEngine(
     private var activeSamples = mutableListOf<GpsSample>()
     private var completedLaps = 0
     private val passedSectors = mutableSetOf<Int>()
+    private var pausedAtMs: Long? = null
 
     val isArmed: Boolean get() = lapStartMs != null
     val currentLapStartMs: Long? get() = lapStartMs
@@ -30,6 +31,7 @@ class TimingEngine(
         activeSamples.clear()
         completedLaps = 0
         passedSectors.clear()
+        pausedAtMs = null
     }
 
     /** Arms timing at a known crossing, for example when auto-discovery closes its learning lap. */
@@ -39,6 +41,21 @@ class TimingEngine(
         activeSamples = mutableListOf(sample)
         completedLaps = completedLapCount
         passedSectors.clear()
+        pausedAtMs = null
+    }
+
+    /** Excludes a box/pause interval from the current lap without discarding session history. */
+    fun pauseAt(timeMs: Long) {
+        if (lapStartMs != null && pausedAtMs == null) pausedAtMs = timeMs
+    }
+
+    fun resumeAt(timeMs: Long) {
+        val pausedAt = pausedAtMs ?: return
+        val pausedDuration = (timeMs - pausedAt).coerceAtLeast(0L)
+        lapStartMs = lapStartMs?.plus(pausedDuration)
+        lastCrossingMs = if (lastCrossingMs == Long.MIN_VALUE) Long.MIN_VALUE else lastCrossingMs + pausedDuration
+        previous = null // Do not treat the journey from the box as a crossing segment.
+        pausedAtMs = null
     }
 
     fun process(sample: GpsSample): TimingEvent? {

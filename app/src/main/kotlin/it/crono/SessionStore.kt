@@ -67,6 +67,8 @@ class SessionStore(context: Context) {
         ?.sortedByDescending { it.startedAtMs }
         ?: emptyList()
 
+    fun delete(session: SavedSession): Boolean = File(directory, "${session.id}.json").delete()
+
     private fun parse(json: JSONObject): SavedSession {
         val lapsJson = json.getJSONArray("laps")
         val laps = (0 until lapsJson.length()).map { index ->

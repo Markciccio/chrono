@@ -36,6 +36,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupMenu
+import android.widget.ScrollView
 import android.widget.TextView
 import java.util.Locale
 import java.text.SimpleDateFormat
@@ -65,6 +66,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var latestFix: GpsSample? = null
     private var previousFix: GpsSample? = null
     private var running = false
+    private var paused = false
+    private var pausedLapElapsedMs: Long? = null
+    private var lowSpeedSinceMs: Long? = null
     private val timing = TimingEngine()
     private var bestLap: Lap? = null
     private var predictor: PredictiveDelta? = null
@@ -90,6 +94,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var simulator: DebugGpsSimulator? = null
     private var testButton: Button? = null
     private var startButton: Button? = null
+    private var pauseButton: Button? = null
     private lateinit var sessionStore: SessionStore
     private val recordedLaps = mutableListOf<RecordedLap>()
     private val currentSectorTimes = linkedMapOf<Int, Long>()
@@ -185,24 +190,29 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val firstControlRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val secondControlRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val thirdControlRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun controlParams(weight: Float) = LinearLayout.LayoutParams(0, dp(37), weight).apply { setMargins(dp(2), dp(2), dp(2), 0) }
         fun control(row: LinearLayout, label: String, weight: Float = 1f, action: () -> Unit) {
             row.addView(actionButton(label, action), controlParams(weight))
         }
         startButton = actionButton("AVVIA") { toggleSession() }
         firstControlRow.addView(startButton, controlParams(1f))
-        control(firstControlRow, "SPOSTA TRAGUARDO", 1f) { setTimingLineAtCurrentFix() }
+        pauseButton = actionButton("PAUSA") { togglePause() }
+        firstControlRow.addView(pauseButton, controlParams(1f))
+        control(secondControlRow, "SPOSTA TRAGUARDO", 1f) { setTimingLineAtCurrentFix() }
         control(secondControlRow, "SPOSTA SETTORE", 1f) { showMoveSectorMenu() }
         testButton = actionButton("TEST GPS") { toggleSimulation() }
-        secondControlRow.addView(testButton, controlParams(1f))
+        thirdControlRow.addView(testButton, controlParams(.5f))
+        thirdControlRow.addView(View(this), controlParams(.5f))
         controls.addView(firstControlRow, LinearLayout.LayoutParams(-1, dp(39)))
         controls.addView(secondControlRow, LinearLayout.LayoutParams(-1, dp(39)))
+        controls.addView(thirdControlRow, LinearLayout.LayoutParams(-1, dp(39)))
 
         val content = LinearLayout(this).apply { orientation = if (isPortrait) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL }
         val mapColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(trackMap, LinearLayout.LayoutParams(-1, 0, 1f))
-            addView(controls, LinearLayout.LayoutParams(-1, dp(80)))
+            addView(controls, LinearLayout.LayoutParams(-1, dp(119)))
         }
         if (isPortrait) {
             content.addView(mapColumn, LinearLayout.LayoutParams(-1, 0, .39f).apply { setMargins(0, dp(6), 0, dp(4)) })
@@ -601,6 +611,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         if (!running) {
             resetSession(keepTrack = true)
             running = true
+            paused = false
+            pauseButton?.text = "PAUSA"
             startButton?.text = "FERMA"
             startGps()
             if (timing.line == null) {
@@ -614,6 +626,51 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             finishAndAnalyzeSession()
         }
         dashboard.invalidate()
+    }
+
+    /** Pause keeps all completed laps and sectors, while excluding a box stop from the active lap. */
+    private fun togglePause() {
+        if (!running) {
+            status.text = "Avvia una registrazione prima di mettere in pausa"
+            return
+        }
+        val timeMs = latestFix?.timeMs ?: System.currentTimeMillis()
+        if (!paused) {
+            pauseSession(timeMs, automatic = false)
+        } else {
+            paused = false
+            timing.resumeAt(timeMs)
+            pausedLapElapsedMs = null
+            lowSpeedSinceMs = null
+            if (simulator != null) simulationHandler.post(simulationTick)
+            pauseButton?.text = "PAUSA"
+            status.text = "Registrazione ripresa"
+            speak("Registrazione ripresa", flush = true)
+        }
+        dashboard.invalidate()
+    }
+
+    private fun pauseSession(timeMs: Long, automatic: Boolean) {
+        paused = true
+        pausedLapElapsedMs = timing.currentLapStartMs?.let { timeMs - it }
+        timing.pauseAt(timeMs)
+        if (simulator != null) simulationHandler.removeCallbacks(simulationTick)
+        pauseButton?.text = "RIPRENDI"
+        status.text = if (automatic) "PAUSA AUTOMATICA · velocità bassa prolungata" else "PAUSA · dati sessione mantenuti"
+        speak(if (automatic) "Pausa automatica. Velocità bassa prolungata" else "Pausa", flush = true)
+    }
+
+    private fun autoPauseIfNeeded(sample: GpsSample): Boolean {
+        if (sample.speedMps < .8f) {
+            val stoppedSince = lowSpeedSinceMs ?: sample.timeMs.also { lowSpeedSinceMs = it }
+            if (sample.timeMs - stoppedSince >= 10 * 60 * 1_000L) {
+                pauseSession(sample.timeMs, automatic = true)
+                return true
+            }
+        } else {
+            lowSpeedSinceMs = null
+        }
+        return false
     }
 
     private fun startGps() {
@@ -639,14 +696,16 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private fun processSample(sample: GpsSample) {
         previousFix = latestFix
         latestFix = sample
-        if (running) {
+        if (running && !paused) {
             liveRoute += TrackPoint(sample.lat, sample.lon)
             sessionSamples += sample
             if (liveRoute.size % 3 == 0) {
                 trackMap.setTrack(liveRoute)
                 if (bestLap == null) trackMap.fitEntireTrack()
             }
-            if (timing.line == null) {
+            if (autoPauseIfNeeded(sample)) {
+                // Keep the current GPS point visible, but do not time the box interval.
+            } else if (timing.line == null) {
                 autoFinish.process(sample)?.let { discovery ->
                     timing.line = discovery.line
                     bestLap = discovery.lap
@@ -672,12 +731,12 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         updateStatus()
         dashboard.setLiveData(
             latestFix,
-            timing.currentLapStartMs?.let { latestFix!!.timeMs - it },
+            if (paused) pausedLapElapsedMs else timing.currentLapStartMs?.let { latestFix!!.timeMs - it },
             liveDeltaMs,
             timing.currentLapNumber,
             lastLapMs,
             bestLap?.durationMs,
-            running
+            running && !paused
         )
         trackMap.setFix(latestFix)
     }
@@ -696,6 +755,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         resetSession()
         simulator = DebugGpsSimulator(TrackPoint(fix.lat, fix.lon), System.currentTimeMillis())
         running = true
+        paused = false
+        pauseButton?.text = "PAUSA"
         startButton?.text = "FERMA"
         testButton?.text = "TEST ATTIVO"
         status.text = "TEST GPS · giro simulato in apprendimento"
@@ -846,6 +907,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val fix = latestFix ?: return
         val lineText = if (timing.line == null) if (running) "ricerca giro" else "automatico" else "traguardo pronto"
         val runText = when {
+            paused -> "PAUSA"
             simulator != null -> "TEST"
             running -> "REC"
             else -> "pronto"
@@ -942,7 +1004,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val saved = saveSessionRecord(wasSimulated, gpxName)
         stopSimulation()
         running = false
+        paused = false
+        pausedLapElapsedMs = null
+        lowSpeedSinceMs = null
         startButton?.text = "AVVIA"
+        pauseButton?.text = "PAUSA"
         status.text = if (saved != null) "Sessione salvata · analisi disponibile" else "Registrazione fermata · nessun dato sufficiente"
         speak(if (saved != null) "Registrazione fermata. Sessione salvata" else "Registrazione fermata", flush = true)
         saved?.let(::resolveSessionLocationName)
@@ -993,16 +1059,54 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             AlertDialog.Builder(this).setTitle("Storico sessioni").setMessage("Nessuna sessione salvata").setPositiveButton("OK", null).show()
             return
         }
-        val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.ITALIAN)
-        val labels = sessions.map { session ->
-            val best = session.laps.minOfOrNull { it.durationMs }?.let(::formatTime) ?: "nessun giro"
-            "${session.displayName} · ${session.laps.size} giri · best $best"
-        }.toTypedArray()
-        AlertDialog.Builder(this)
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+        }
+        val scroll = ScrollView(this).apply { addView(list) }
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Storico sessioni")
-            .setItems(labels) { _, index -> showSessionAnalysis(sessions[index]) }
+            .setView(scroll)
             .setNegativeButton("CHIUDI", null)
-            .show()
+            .create()
+        sessions.forEach { session ->
+            val best = session.laps.minOfOrNull { it.durationMs }?.let(::formatTime) ?: "nessun giro"
+            val title = TextView(this).apply {
+                text = "${session.displayName}\n${session.laps.size} giri · best $best"
+                textSize = 14f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(4), dp(6), dp(4))
+                background = hudPanel(Color.rgb(7, 24, 33), Color.rgb(28, 148, 190), 1)
+                setOnClickListener { dialog.dismiss(); showSessionAnalysis(session) }
+            }
+            val delete = Button(this).apply {
+                text = "🗑"
+                textSize = 18f
+                contentDescription = "Elimina ${session.displayName}"
+                setTextColor(Color.rgb(255, 112, 112))
+                background = hudPanel(Color.rgb(37, 16, 22), Color.rgb(255, 91, 100), 1)
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Eliminare sessione?")
+                        .setMessage(session.displayName)
+                        .setNegativeButton("ANNULLA", null)
+                        .setPositiveButton("ELIMINA") { _, _ ->
+                            sessionStore.delete(session)
+                            dialog.dismiss()
+                            showSessionHistory()
+                        }
+                        .show()
+                }
+            }
+            list.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(3), 0, dp(3))
+                addView(title, LinearLayout.LayoutParams(0, dp(54), 1f))
+                addView(delete, LinearLayout.LayoutParams(dp(52), dp(54)).apply { setMargins(dp(5), 0, 0, 0) })
+            })
+        }
+        dialog.show()
     }
 
     private fun showSessionAnalysis(session: SavedSession) {
@@ -1063,8 +1167,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val tableTop = dp(107).toFloat()
             val headerBottom = tableTop + dp(25)
             canvas.drawRect(0f, tableTop, width.toFloat(), headerBottom, Paint().apply { color = Color.rgb(9, 39, 51) })
-            val columns = floatArrayOf(width * .05f, width * .16f, width * .29f, width * .42f, width * .54f, width * .68f, width * .82f)
-            listOf("LAP", "TEMPO", "DELTA", "S1", "V MAX", "S2", "V MIN").forEachIndexed { index, label -> canvas.drawText(label, columns[index], tableTop + dp(17), smallPaint.apply { textAlign = Paint.Align.CENTER }) }
+            val columns = floatArrayOf(width * .05f, width * .16f, width * .29f, width * .43f, width * .57f, width * .73f, width * .87f)
+            listOf("LAP", "TEMPO", "DELTA", "S1", "S2", "V MAX", "V MIN").forEachIndexed { index, label -> canvas.drawText(label, columns[index], tableTop + dp(17), smallPaint.apply { textAlign = Paint.Align.CENTER }) }
             val dataTop = headerBottom + dp(4)
             val rowHeight = dp(24).toFloat()
             val maxScroll = (session.laps.size * rowHeight - (height - dataTop - dp(8))).coerceAtLeast(0f)
@@ -1088,10 +1192,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 canvas.drawText(formatDelta(delta), columns[2], y, rowPaint)
                 rowPaint.color = Color.rgb(255, 205, 90)
                 canvas.drawText(lap.sectorElapsedMs.getOrNull(0)?.let(::formatTime) ?: "—", columns[3], y, rowPaint)
+                canvas.drawText(lap.sectorElapsedMs.getOrNull(1)?.let(::formatTime) ?: "—", columns[4], y, rowPaint)
                 rowPaint.color = Color.rgb(255, 112, 112)
-                canvas.drawText(lap.samples.maxOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[4], y, rowPaint)
-                rowPaint.color = Color.rgb(255, 205, 90)
-                canvas.drawText(lap.sectorElapsedMs.getOrNull(1)?.let(::formatTime) ?: "—", columns[5], y, rowPaint)
+                canvas.drawText(lap.samples.maxOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[5], y, rowPaint)
                 rowPaint.color = Color.rgb(72, 205, 255)
                 canvas.drawText(lap.samples.minOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[6], y, rowPaint)
             }
@@ -1138,7 +1241,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
         stopSimulation()
         running = false
+        paused = false
+        pausedLapElapsedMs = null
+        lowSpeedSinceMs = null
         startButton?.text = "AVVIA"
+        pauseButton?.text = "PAUSA"
         timing.reset()
         autoFinish.reset()
         liveRoute.clear()
