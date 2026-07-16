@@ -1,6 +1,14 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+val signingProperties = Properties()
+val signingPropertiesFile = rootProject.file("signing.properties")
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.inputStream().use(signingProperties::load)
 }
 
 android {
@@ -18,6 +26,14 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (signingPropertiesFile.exists()) {
+                signingConfig = signingConfigs.create("release") {
+                    storeFile = rootProject.file(signingProperties.getProperty("storeFile"))
+                    storePassword = signingProperties.getProperty("storePassword")
+                    keyAlias = signingProperties.getProperty("keyAlias")
+                    keyPassword = signingProperties.getProperty("keyPassword")
+                }
+            }
         }
     }
 }
