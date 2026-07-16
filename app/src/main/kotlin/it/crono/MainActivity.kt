@@ -659,7 +659,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 val deltaPart = delta?.let { ". ${spokenDelta(it)}" } ?: ""
                 if (voiceBriefingMode != VoiceBriefingMode.LAPS_ONLY) {
                     val recordPart = if (isSegmentRecord) ". ${sectorRecordMessage(event.number, segmentMs)}" else ""
-                    speak("Settore ${event.number}. ${spokenTime(event.elapsedMs)}$deltaPart$recordPart", flush = true)
+                    val sectorCall = if (isSegmentRecord) "Fucsia. Settore ${event.number}" else "Settore ${event.number}"
+                    speak("$sectorCall. ${spokenTime(event.elapsedMs)}$deltaPart$recordPart", flush = true)
                 }
                 // Sector calls always win over predictive-delta calls, including the samples just after it.
                 deltaAnnouncementsSuppressedUntilMs = (latestFix?.timeMs ?: System.currentTimeMillis()) + 3_000L
@@ -696,13 +697,13 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 val message = buildString {
                     append("Giro ${event.lap.number}. ${spokenTime(event.lap.durationMs)}.")
                     oldBest?.let {
-                        // Announce the gap to the record on every completed lap, including a new best.
-                        append(" ${spokenDelta(event.lap.durationMs - it.durationMs)} rispetto al record.")
-                    } ?: append(" Best lap impostato.")
+                        // Announce the gap to the best time on every completed lap, including a new best.
+                        append(" ${spokenDelta(event.lap.durationMs - it.durationMs)} sul tempo migliore.")
+                    } ?: append(" Tempo migliore impostato.")
                     if (isBest) append(" Miglior giro.")
                     else oldBest?.let {
                         if (event.lap.number - lastBestReminderLap >= 3) {
-                            append(" Best lap ${spokenTime(it.durationMs)}.")
+                            append(" Tempo migliore ${spokenTime(it.durationMs)}.")
                             lastBestReminderLap = event.lap.number
                         }
                     }
@@ -813,12 +814,12 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun sectorRecordMessage(number: Int, segmentMs: Long) = when (number) {
-        1 -> "S uno record. ${spokenTime(segmentMs)}"
-        2 -> "Tratto S uno S due record. ${spokenTime(segmentMs)}"
-        else -> "Tratto dopo S${number - 1} record. ${spokenTime(segmentMs)}"
+        1 -> "Tempo migliore settore uno. ${spokenTime(segmentMs)}"
+        2 -> "Tempo migliore nel tratto tra settore uno e due. ${spokenTime(segmentMs)}"
+        else -> "Tempo migliore del settore $number. ${spokenTime(segmentMs)}"
     }
 
-    private fun finalSectorRecordMessage(segmentMs: Long) = "Ultimo settore record. ${spokenTime(segmentMs)}"
+    private fun finalSectorRecordMessage(segmentMs: Long) = "Fucsia. Tempo migliore ultimo settore. ${spokenTime(segmentMs)}"
 
     private fun saveCurrentSession(): String? {
         if (simulator != null || sessionSamples.size < 2) return null
