@@ -47,7 +47,7 @@ import kotlin.math.abs
 class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private enum class VoiceBriefingMode { ALL, SECTORS_AND_LAPS, LAPS_ONLY }
     private enum class LiveTimingSize(val label: String, val scale: Float) {
-        COMPACT("Compatto", .86f), STANDARD("Standard", 1f), LARGE("Grande", 1.14f)
+        COMPACT("Compatto", 1f), STANDARD("Standard", 1.14f), LARGE("Grande", 1.28f)
     }
     private enum class ScreenMode(val label: String, val orientation: Int) {
         LANDSCAPE("Orizzontale", ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE),
@@ -1387,7 +1387,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = red }
             // Large live timing needs extra vertical room: otherwise the larger delta ascenders
             // collide with the label above it.
-            val largeTextOffset = if (liveTimingScale > 1f) dp(16) else 0
+            val largeTextOffset = if (liveTimingScale > 1f) {
+                // Extra space grows more slowly than glyph size, keeping the final lap cards
+                // safely inside the fixed-height HUD even at the new larger setting.
+                dp((10f + (liveTimingScale - 1f) * 45f).toInt())
+            } else 0
             val rowText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.WHITE; textSize = timingTextSize(17); typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             }
@@ -1433,7 +1437,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
             // Extra vertical space keeps label and large time separate on compact Pixel screens.
             val cardTop = (dp(210) + largeTextOffset).toFloat()
-            val cardBottom = (dp(278) + largeTextOffset).toFloat()
+            val cardBottom = cardTop + dp(if (largeTextOffset > 0) 65 else 68)
             val gap = dp(7).toFloat()
             val mid = width / 2f
             canvas.drawRoundRect(pad, cardTop, mid - gap, cardBottom, dp(4).toFloat(), dp(4).toFloat(), darkPanelPaint)
