@@ -7,6 +7,8 @@ import android.app.Dialog
 import android.content.Intent
 import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
@@ -43,6 +45,14 @@ import kotlin.math.abs
 /** Track-day focused MVP: big live data, robust timing-line crossings and voice feedback. */
 class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private enum class VoiceBriefingMode { ALL, SECTORS_AND_LAPS, LAPS_ONLY }
+    private enum class LiveTimingSize(val label: String, val scale: Float) {
+        COMPACT("Compatto", .86f), STANDARD("Standard", 1f), LARGE("Grande", 1.14f)
+    }
+    private enum class ScreenMode(val label: String, val orientation: Int) {
+        LANDSCAPE("Orizzontale", ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE),
+        PORTRAIT("Verticale", ActivityInfo.SCREEN_ORIENTATION_PORTRAIT),
+        AUTO("Automatica", ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED)
+    }
 
     private lateinit var locationManager: LocationManager
     private lateinit var dashboard: RaceView
@@ -72,6 +82,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var voiceEnabled = true
     private var voiceAlertIntervalMs = 10_000L
     private var voiceBriefingMode = VoiceBriefingMode.ALL
+    private val preferences by lazy { getSharedPreferences("pit_engineer_options", MODE_PRIVATE) }
+    private var liveTimingSize = LiveTimingSize.STANDARD
+    private var screenMode = ScreenMode.LANDSCAPE
     private val simulationHandler = Handler(Looper.getMainLooper())
     private var simulator: DebugGpsSimulator? = null
     private var testButton: Button? = null
@@ -91,6 +104,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        liveTimingSize = LiveTimingSize.entries.getOrElse(preferences.getInt("liveTimingSize", LiveTimingSize.STANDARD.ordinal)) { LiveTimingSize.STANDARD }
+        screenMode = ScreenMode.entries.getOrElse(preferences.getInt("screenMode", ScreenMode.LANDSCAPE.ordinal)) { ScreenMode.LANDSCAPE }
+        if (requestedOrientation != screenMode.orientation) requestedOrientation = screenMode.orientation
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.decorView.systemUiVisibility = (
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or
@@ -142,14 +158,16 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
         dashboard = RaceView().apply {
             onTrackTapped = ::handleTrackTap
+            setLiveTimingScale(liveTimingSize.scale)
         }
         trackMap = TrackMapView(this, ::handleTrackTap)
+        val isPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(optionsButton, LinearLayout.LayoutParams(dp(58), dp(42)))
-            addView(brand, LinearLayout.LayoutParams(dp(178), dp(42)).apply { setMargins(dp(4), 0, dp(4), 0) })
+            addView(optionsButton, LinearLayout.LayoutParams(dp(if (isPortrait) 48 else 58), dp(42)))
+            addView(brand, LinearLayout.LayoutParams(dp(if (isPortrait) 140 else 178), dp(42)).apply { setMargins(dp(4), 0, dp(4), 0) })
             addView(status, LinearLayout.LayoutParams(0, dp(42), 1f))
-            addView(closeButton, LinearLayout.LayoutParams(dp(48), dp(42)).apply { setMargins(dp(4), 0, 0, 0) })
+            addView(closeButton, LinearLayout.LayoutParams(dp(if (isPortrait) 44 else 48), dp(42)).apply { setMargins(dp(4), 0, 0, 0) })
         }
         root.addView(header, LinearLayout.LayoutParams(-1, dp(42)))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -168,14 +186,19 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         controls.addView(firstControlRow, LinearLayout.LayoutParams(-1, dp(39)))
         controls.addView(secondControlRow, LinearLayout.LayoutParams(-1, dp(39)))
 
-        val content = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val content = LinearLayout(this).apply { orientation = if (isPortrait) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL }
         val mapColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(trackMap, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(controls, LinearLayout.LayoutParams(-1, dp(80)))
         }
-        content.addView(mapColumn, LinearLayout.LayoutParams(0, -1, .35f).apply { setMargins(0, dp(6), dp(5), 0) })
-        content.addView(dashboard, LinearLayout.LayoutParams(0, -1, .65f).apply { setMargins(dp(5), dp(6), 0, 0) })
+        if (isPortrait) {
+            content.addView(mapColumn, LinearLayout.LayoutParams(-1, 0, .39f).apply { setMargins(0, dp(6), 0, dp(4)) })
+            content.addView(dashboard, LinearLayout.LayoutParams(-1, 0, .61f).apply { setMargins(0, dp(4), 0, 0) })
+        } else {
+            content.addView(mapColumn, LinearLayout.LayoutParams(0, -1, .35f).apply { setMargins(0, dp(6), dp(5), 0) })
+            content.addView(dashboard, LinearLayout.LayoutParams(0, -1, .65f).apply { setMargins(dp(5), dp(6), 0, 0) })
+        }
         root.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
 
@@ -213,6 +236,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             menu.add(if (voiceEnabled) "Voce: attiva" else "Voce: disattivata")
             menu.add("Avvisi di pista")
             menu.add("Frequenza avvisi vocali")
+            menu.add("Dimensione live timing")
+            menu.add("Orientamento schermo")
             menu.add("Inquadra tutta la traccia")
             menu.add("Storico sessioni")
             setOnMenuItemClickListener { item ->
@@ -224,6 +249,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     }
                     "Avvisi di pista" -> showVoiceBriefingMenu()
                     "Frequenza avvisi vocali" -> showVoiceFrequencyMenu()
+                    "Dimensione live timing" -> showLiveTimingSizeMenu()
+                    "Orientamento schermo" -> showScreenOrientationMenu()
                     "Inquadra tutta la traccia" -> {
                         trackMap.fitEntireTrack()
                         status.text = "Mappa adattata alla traccia"
@@ -234,6 +261,38 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             }
             show()
         }
+    }
+
+    private fun showLiveTimingSizeMenu() {
+        val choices = LiveTimingSize.entries.map { it.label }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Dimensione live timing")
+            .setSingleChoiceItems(choices, liveTimingSize.ordinal) { dialog, which ->
+                liveTimingSize = LiveTimingSize.entries[which]
+                preferences.edit().putInt("liveTimingSize", which).apply()
+                dashboard.setLiveTimingScale(liveTimingSize.scale)
+                status.text = "Live timing: ${liveTimingSize.label.lowercase(Locale.ITALIAN)}"
+                dialog.dismiss()
+            }
+            .show()
+    }
+
+    private fun showScreenOrientationMenu() {
+        val choices = ScreenMode.entries.map { it.label }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Orientamento schermo")
+            .setSingleChoiceItems(choices, screenMode.ordinal) { dialog, which ->
+                if (running) {
+                    status.text = "Ferma la registrazione prima di ruotare lo schermo"
+                    dialog.dismiss()
+                    return@setSingleChoiceItems
+                }
+                screenMode = ScreenMode.entries[which]
+                preferences.edit().putInt("screenMode", which).apply()
+                requestedOrientation = screenMode.orientation
+                dialog.dismiss()
+            }
+            .show()
     }
 
     private fun showVoiceBriefingMenu() {
@@ -1193,6 +1252,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private inner class RaceView : View(this) {
+        private var liveTimingScale = 1f
         private val routePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(61, 169, 255); strokeWidth = dp(2).toFloat(); style = Paint.Style.STROKE }
         private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.YELLOW; strokeWidth = dp(4).toFloat() }
         private val fixPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.RED; style = Paint.Style.FILL }
@@ -1272,6 +1332,13 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             fix = value; elapsed = lapElapsed; delta = valueDelta; lapNumber = currentLapNumber; last = lastLap; best = bestLap; recording = isRecording; invalidate()
         }
 
+        fun setLiveTimingScale(scale: Float) {
+            liveTimingScale = scale
+            invalidate()
+        }
+
+        private fun timingTextSize(baseDp: Int) = dp(baseDp).toFloat() * liveTimingScale
+
         fun setSectorResult(number: Int, elapsedMs: Long, deltaMs: Long?) {
             sectorTexts[number] = "S$number  ${formatTime(elapsedMs)}${deltaMs?.let { " ${formatDelta(it)}" } ?: ""}"
             invalidate()
@@ -1292,9 +1359,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val darkPanelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(12, 19, 29) }
             val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = red }
             val rowText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE; textSize = dp(17).toFloat(); typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                color = Color.WHITE; textSize = timingTextSize(17); typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             }
-            val valueText = Paint(rowText).apply { textAlign = Paint.Align.RIGHT; textSize = dp(23).toFloat() }
+            val valueText = Paint(rowText).apply { textAlign = Paint.Align.RIGHT; textSize = timingTextSize(23) }
 
             canvas.drawRect(0f, 0f, width.toFloat(), dp(28).toFloat(), darkPanelPaint)
             canvas.drawRect(0f, 0f, dp(6).toFloat(), dp(28).toFloat(), accentPaint)
@@ -1317,13 +1384,13 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val deltaText = delta?.let { if (it < 0) "▲ ${formatDelta(it)}" else "▼ ${formatDelta(it)}" } ?: "± 0.00"
             deltaPaint.color = deltaColor
             deltaPaint.textAlign = Paint.Align.LEFT
-            deltaPaint.textSize = dp(42).toFloat()
+            deltaPaint.textSize = timingTextSize(42)
             canvas.drawText(deltaText, pad + dp(18), dp(91).toFloat(), deltaPaint)
             labelPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText("BEST LAP", width - pad - dp(18), dp(58).toFloat(), labelPaint)
             bestPaint.color = Color.rgb(69, 223, 123)
             bestPaint.textAlign = Paint.Align.RIGHT
-            bestPaint.textSize = dp(36).toFloat()
+            bestPaint.textSize = timingTextSize(36)
             canvas.drawText(best?.let(::formatTime) ?: "--:--.---", width - pad - dp(18), dp(91).toFloat(), bestPaint)
 
             canvas.drawRect(pad, dp(106).toFloat(), width - pad, dp(128).toFloat(), darkPanelPaint)
@@ -1344,6 +1411,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawRect(pad, cardTop, pad + dp(5), cardBottom, Paint().apply { color = Color.rgb(238, 245, 247) })
             canvas.drawRect(mid + gap, cardTop, mid + gap + dp(5), cardBottom, Paint().apply { color = green })
             labelPaint.textAlign = Paint.Align.CENTER
+            lastPaint.textSize = timingTextSize(22)
             canvas.drawText("LAST LAP", (pad + mid - gap) / 2f, cardTop + dp(17), labelPaint)
             canvas.drawText(last?.let(::formatTime) ?: "--:--.---", (pad + mid - gap) / 2f, cardBottom - dp(10), lastPaint)
             canvas.drawText("CURRENT LAP", (mid + gap + width - pad) / 2f, cardTop + dp(17), labelPaint)
@@ -1351,11 +1419,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             lastPaint.color = Color.rgb(238, 245, 247)
             canvas.drawText(currentTime, (mid + gap + width - pad) / 2f, cardBottom - dp(10), lastPaint)
             primaryPaint.textAlign = Paint.Align.CENTER
-            primaryPaint.textSize = dp(48).toFloat()
+            primaryPaint.textSize = timingTextSize(48)
             deltaPaint.textAlign = Paint.Align.CENTER
-            deltaPaint.textSize = dp(25).toFloat()
+            deltaPaint.textSize = timingTextSize(25)
             bestPaint.textAlign = Paint.Align.CENTER
-            bestPaint.textSize = dp(22).toFloat()
+            bestPaint.textSize = timingTextSize(22)
             labelPaint.color = Color.rgb(112, 157, 174)
             labelPaint.textAlign = Paint.Align.CENTER
         }
