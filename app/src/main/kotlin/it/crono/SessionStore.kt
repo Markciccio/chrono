@@ -14,7 +14,9 @@ data class SavedSession(
     val durationMs: Long,
     val simulated: Boolean,
     val gpxName: String?,
-    val laps: List<RecordedLap>
+    val laps: List<RecordedLap>,
+    val maxSpeedMps: Float? = null,
+    val minSpeedMps: Float? = null
 )
 
 class SessionStore(context: Context) {
@@ -28,6 +30,8 @@ class SessionStore(context: Context) {
             put("durationMs", session.durationMs)
             put("simulated", session.simulated)
             put("gpxName", session.gpxName ?: JSONObject.NULL)
+            put("maxSpeedMps", session.maxSpeedMps ?: JSONObject.NULL)
+            put("minSpeedMps", session.minSpeedMps ?: JSONObject.NULL)
             put("laps", JSONArray().apply {
                 session.laps.forEach { lap ->
                     put(JSONObject().apply {
@@ -65,7 +69,9 @@ class SessionStore(context: Context) {
             json.getLong("durationMs"),
             json.getBoolean("simulated"),
             if (json.isNull("gpxName")) null else json.getString("gpxName"),
-            laps
+            laps,
+            if (json.isNull("maxSpeedMps")) null else json.optDouble("maxSpeedMps").toFloat(),
+            if (json.isNull("minSpeedMps")) null else json.optDouble("minSpeedMps").toFloat()
         )
     }
 }

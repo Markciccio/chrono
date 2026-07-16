@@ -789,7 +789,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 durationMs = (last.timeMs - first.timeMs).coerceAtLeast(0),
                 simulated = simulated,
                 gpxName = gpxName,
-                laps = recordedLaps.toList()
+                laps = recordedLaps.toList(),
+                maxSpeedMps = sessionSamples.maxOfOrNull { it.speedMps },
+                minSpeedMps = sessionSamples.minOfOrNull { it.speedMps }
             )
         )
     }
@@ -855,6 +857,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 session.laps.minOf { it.sectorElapsedMs[1] - it.sectorElapsedMs[0] } +
                 session.laps.minOf { it.durationMs - it.sectorElapsedMs[1] }
         } else null
+        private val maxSpeedKmh = session.maxSpeedMps?.times(3.6f)?.toInt()
+        private val minSpeedKmh = session.minSpeedMps?.times(3.6f)?.toInt()
         private val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = dp(18).toFloat(); typeface = Typeface.DEFAULT_BOLD }
         private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(150, 190, 204); textSize = dp(10).toFloat(); typeface = Typeface.DEFAULT_BOLD }
         private val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = dp(17).toFloat(); textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
@@ -885,23 +889,31 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             drawMetric(canvas, pad + (cardWidth + dp(3)) * 2, cardTop, cardWidth, cardBottom, "MEDIA", average?.let(::formatTime) ?: "--:--.---", Color.rgb(255, 185, 64))
             drawMetric(canvas, pad + (cardWidth + dp(3)) * 3, cardTop, cardWidth, cardBottom, "IDEAL", ideal?.let(::formatTime) ?: "--:--.---", Color.rgb(174, 119, 255))
 
-            val tableTop = dp(111).toFloat()
-            canvas.drawRect(0f, tableTop - dp(18), width.toFloat(), tableTop + dp(4), Paint().apply { color = Color.rgb(9, 39, 51) })
-            val columns = floatArrayOf(width * .07f, width * .25f, width * .43f, width * .60f, width * .76f, width * .92f)
-            listOf("LAP", "TEMPO", "DELTA", "S1", "S2", "STATO").forEachIndexed { index, label -> canvas.drawText(label, columns[index], tableTop - dp(4), smallPaint.apply { textAlign = Paint.Align.CENTER }) }
+            val speedTop = dp(99).toFloat(); val speedBottom = dp(136).toFloat()
+            val speedWidth = (width - dp(30)) / 2f
+            drawMetric(canvas, pad, speedTop, speedWidth, speedBottom, "V MAX", maxSpeedKmh?.let { "$it km/h" } ?: "—", Color.rgb(255, 112, 112))
+            drawMetric(canvas, pad + speedWidth + dp(6), speedTop, speedWidth, speedBottom, "V MIN", minSpeedKmh?.let { "$it km/h" } ?: "—", Color.rgb(72, 205, 255))
+
+            val tableTop = dp(153).toFloat()
+            val headerBottom = tableTop + dp(25)
+            canvas.drawRect(0f, tableTop, width.toFloat(), headerBottom, Paint().apply { color = Color.rgb(9, 39, 51) })
+            val columns = floatArrayOf(width * .06f, width * .22f, width * .39f, width * .56f, width * .71f, width * .89f)
+            listOf("LAP", "TEMPO", "DELTA", "S1", "S2", "STATO").forEachIndexed { index, label -> canvas.drawText(label, columns[index], tableTop + dp(17), smallPaint.apply { textAlign = Paint.Align.CENTER }) }
+            val dataTop = headerBottom + dp(4)
             val rowHeight = dp(22).toFloat()
-            val maxScroll = (session.laps.size * rowHeight - (height - tableTop - dp(8))).coerceAtLeast(0f)
+            val maxScroll = (session.laps.size * rowHeight - (height - dataTop - dp(8))).coerceAtLeast(0f)
             scroll = scroll.coerceIn(0f, maxScroll)
             session.laps.forEachIndexed { index, lap ->
-                val y = tableTop + rowHeight * index - scroll
-                if (y < tableTop - rowHeight || y > height + rowHeight) return@forEachIndexed
+                val rowTop = dataTop + rowHeight * index - scroll
+                val y = rowTop + dp(16)
+                if (rowTop < dataTop - rowHeight || rowTop > height + rowHeight) return@forEachIndexed
                 val delta = best?.let { lap.durationMs - it } ?: 0
                 val rowColor = when {
                     delta == 0L -> Color.rgb(24, 213, 184)
                     delta < 0L -> Color.rgb(91, 220, 135)
                     else -> Color.rgb(255, 112, 112)
                 }
-                canvas.drawLine(pad, y + dp(6), width - pad, y + dp(6), gridPaint)
+                canvas.drawLine(pad, rowTop + rowHeight, width - pad, rowTop + rowHeight, gridPaint)
                 rowPaint.color = Color.WHITE
                 canvas.drawText(lap.number.toString(), columns[0], y, rowPaint)
                 rowPaint.color = if (delta == 0L) Color.rgb(24, 213, 184) else Color.WHITE
@@ -916,7 +928,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             }
             if (session.laps.isEmpty()) {
                 rowPaint.color = Color.LTGRAY
-                canvas.drawText("NESSUN GIRO COMPLETO NELLA SESSIONE", width / 2f, tableTop + dp(35), rowPaint)
+                canvas.drawText("NESSUN GIRO COMPLETO NELLA SESSIONE", width / 2f, dataTop + dp(35), rowPaint)
             }
         }
 
@@ -1200,6 +1212,12 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawText("CRONO  //  LIVE TIMING", pad + dp(8), dp(20).toFloat(), labelPaint)
             labelPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText("GIRO $lapNumber", width - pad, dp(20).toFloat(), labelPaint)
+            if (recording) {
+                labelPaint.color = Color.rgb(255, 82, 92)
+                labelPaint.textAlign = Paint.Align.CENTER
+                canvas.drawText("● REC", width * .66f, dp(20).toFloat(), labelPaint)
+                labelPaint.color = Color.rgb(112, 157, 174)
+            }
 
             val time = elapsed?.let(::formatTime) ?: "--:--.---"
             canvas.drawRoundRect(pad, dp(38).toFloat(), width - pad, dp(98).toFloat(), dp(4).toFloat(), dp(4).toFloat(), panelPaint)
@@ -1245,13 +1263,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             deltaPaint.textSize = dp(25).toFloat()
             labelPaint.color = Color.rgb(112, 157, 174)
             labelPaint.textAlign = Paint.Align.CENTER
-            if (recording) {
-                labelPaint.color = Color.rgb(255, 82, 92)
-                labelPaint.textAlign = Paint.Align.RIGHT
-                canvas.drawText("● REC", width - dp(12).toFloat(), dp(18).toFloat(), labelPaint)
-                labelPaint.color = Color.rgb(112, 157, 174)
-                labelPaint.textAlign = Paint.Align.CENTER
-            }
         }
 
         private fun drawTimingRow(
