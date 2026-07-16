@@ -86,10 +86,17 @@ class DebugGpsSimulator(
     fun next(): GpsSample {
         val lapIndex = floor(distanceM / CIRCUIT_LENGTH_M).toInt()
         val phase = distanceM / CIRCUIT_LENGTH_M * 2.0 * PI
-        val averagePace = when (lapIndex % 3) {
-            0 -> 14.0 // First/reference lap: about 1 minute and 30 seconds.
-            1 -> 12.6 // A slower lap: produces a positive delta.
-            else -> 15.6 // A faster lap: produces a negative delta.
+        val averagePace = when (lapIndex) {
+            // The first two laps deliberately vary more, as with an out-lap and a first push lap.
+            0 -> 13.6
+            1 -> 14.3
+            // Once the driver has settled, keep lap times within roughly 1–2 seconds.
+            else -> when (lapIndex % 4) {
+                0 -> 13.92
+                1 -> 14.10
+                2 -> 13.82
+                else -> 14.00
+            }
         }
         val speed = (averagePace + 2.0 * sin(phase * 3.0) + 1.0 * sin(phase * 7.0)).coerceAtLeast(7.0)
         distanceM += speed * STEP_MS / 1_000.0
