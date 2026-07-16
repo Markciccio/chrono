@@ -1385,6 +1385,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(20, 28, 39) }
             val darkPanelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(12, 19, 29) }
             val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = red }
+            // Large live timing needs extra vertical room: otherwise the larger delta ascenders
+            // collide with the label above it.
+            val largeTextOffset = if (liveTimingScale > 1f) dp(16) else 0
             val rowText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.WHITE; textSize = timingTextSize(17); typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             }
@@ -1404,33 +1407,33 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 labelPaint.color = Color.rgb(112, 157, 174)
             }
 
-            canvas.drawRoundRect(pad, dp(38).toFloat(), width - pad, dp(98).toFloat(), dp(4).toFloat(), dp(4).toFloat(), panelPaint)
-            canvas.drawRect(pad, dp(38).toFloat(), pad + dp(6), dp(98).toFloat(), accentPaint)
+            canvas.drawRoundRect(pad, dp(38).toFloat(), width - pad, (dp(98) + largeTextOffset).toFloat(), dp(4).toFloat(), dp(4).toFloat(), panelPaint)
+            canvas.drawRect(pad, dp(38).toFloat(), pad + dp(6), (dp(98) + largeTextOffset).toFloat(), accentPaint)
             labelPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("DELTA vs BEST LAP", pad + dp(18), dp(58).toFloat(), labelPaint)
+            canvas.drawText("DELTA vs BEST LAP", pad + dp(18), (if (largeTextOffset > 0) dp(55) else dp(58)).toFloat(), labelPaint)
             val deltaText = delta?.let { if (it < 0) "▲ ${formatDelta(it)}" else "▼ ${formatDelta(it)}" } ?: "± 0.00"
             deltaPaint.color = deltaColor
             deltaPaint.textAlign = Paint.Align.LEFT
             deltaPaint.textSize = timingTextSize(42)
-            canvas.drawText(deltaText, pad + dp(18), dp(91).toFloat(), deltaPaint)
+            canvas.drawText(deltaText, pad + dp(18), (dp(91) + largeTextOffset).toFloat(), deltaPaint)
             labelPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("BEST LAP", width - pad - dp(18), dp(58).toFloat(), labelPaint)
+            canvas.drawText("BEST LAP", width - pad - dp(18), (if (largeTextOffset > 0) dp(55) else dp(58)).toFloat(), labelPaint)
             bestPaint.color = Color.rgb(69, 223, 123)
             bestPaint.textAlign = Paint.Align.RIGHT
             bestPaint.textSize = timingTextSize(36)
-            canvas.drawText(best?.let(::formatTime) ?: "--:--.---", width - pad - dp(18), dp(91).toFloat(), bestPaint)
+            canvas.drawText(best?.let(::formatTime) ?: "--:--.---", width - pad - dp(18), (dp(91) + largeTextOffset).toFloat(), bestPaint)
 
-            canvas.drawRect(pad, dp(106).toFloat(), width - pad, dp(128).toFloat(), darkPanelPaint)
+            canvas.drawRect(pad, (dp(106) + largeTextOffset).toFloat(), width - pad, (dp(128) + largeTextOffset).toFloat(), darkPanelPaint)
             labelPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("SECTOR", pad + dp(12), dp(123).toFloat(), labelPaint)
+            canvas.drawText("SECTOR", pad + dp(12), (dp(123) + largeTextOffset).toFloat(), labelPaint)
             labelPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("TEMPO / DELTA", width - pad - dp(12), dp(123).toFloat(), labelPaint)
-            drawTimingRow(canvas, dp(130).toFloat(), "S1", sectorTexts[1] ?: "--:--.---", Color.rgb(70, 205, 255), rowText, valueText, panelPaint)
-            drawTimingRow(canvas, dp(169).toFloat(), "S2", sectorTexts[2] ?: "--:--.---", Color.rgb(255, 185, 64), rowText, valueText, darkPanelPaint)
+            canvas.drawText("TEMPO / DELTA", width - pad - dp(12), (dp(123) + largeTextOffset).toFloat(), labelPaint)
+            drawTimingRow(canvas, (dp(130) + largeTextOffset).toFloat(), "S1", sectorTexts[1] ?: "--:--.---", Color.rgb(70, 205, 255), rowText, valueText, panelPaint)
+            drawTimingRow(canvas, (dp(169) + largeTextOffset).toFloat(), "S2", sectorTexts[2] ?: "--:--.---", Color.rgb(255, 185, 64), rowText, valueText, darkPanelPaint)
 
             // Extra vertical space keeps label and large time separate on compact Pixel screens.
-            val cardTop = dp(210).toFloat()
-            val cardBottom = dp(278).toFloat()
+            val cardTop = (dp(210) + largeTextOffset).toFloat()
+            val cardBottom = (dp(278) + largeTextOffset).toFloat()
             val gap = dp(7).toFloat()
             val mid = width / 2f
             canvas.drawRoundRect(pad, cardTop, mid - gap, cardBottom, dp(4).toFloat(), dp(4).toFloat(), darkPanelPaint)
