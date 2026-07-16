@@ -1031,8 +1031,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 session.laps.minOf { it.sectorElapsedMs[1] - it.sectorElapsedMs[0] } +
                 session.laps.minOf { it.durationMs - it.sectorElapsedMs[1] }
         } else null
-        private val maxSpeedKmh = session.maxSpeedMps?.times(3.6f)?.toInt()
-        private val minSpeedKmh = session.minSpeedMps?.times(3.6f)?.toInt()
         private val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = dp(18).toFloat(); typeface = Typeface.DEFAULT_BOLD }
         private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(150, 190, 204); textSize = dp(10).toFloat(); typeface = Typeface.DEFAULT_BOLD }
         private val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = dp(17).toFloat(); textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD }
@@ -1063,18 +1061,14 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             drawMetric(canvas, pad + (cardWidth + dp(3)) * 2, cardTop, cardWidth, cardBottom, "MEDIA", average?.let(::formatTime) ?: "--:--.---", Color.rgb(255, 185, 64))
             drawMetric(canvas, pad + (cardWidth + dp(3)) * 3, cardTop, cardWidth, cardBottom, "IDEAL", ideal?.let(::formatTime) ?: "--:--.---", Color.rgb(174, 119, 255))
 
-            val speedTop = dp(99).toFloat(); val speedBottom = dp(136).toFloat()
-            val speedWidth = (width - dp(30)) / 2f
-            drawMetric(canvas, pad, speedTop, speedWidth, speedBottom, "V MAX", maxSpeedKmh?.let { "$it km/h" } ?: "—", Color.rgb(255, 112, 112))
-            drawMetric(canvas, pad + speedWidth + dp(6), speedTop, speedWidth, speedBottom, "V MIN", minSpeedKmh?.let { "$it km/h" } ?: "—", Color.rgb(72, 205, 255))
-
-            val tableTop = dp(153).toFloat()
+            // Speed belongs to the lap that produced it, not to a session-wide summary.
+            val tableTop = dp(107).toFloat()
             val headerBottom = tableTop + dp(25)
             canvas.drawRect(0f, tableTop, width.toFloat(), headerBottom, Paint().apply { color = Color.rgb(9, 39, 51) })
-            val columns = floatArrayOf(width * .06f, width * .22f, width * .39f, width * .56f, width * .71f, width * .89f)
-            listOf("LAP", "TEMPO", "DELTA", "S1", "S2", "STATO").forEachIndexed { index, label -> canvas.drawText(label, columns[index], tableTop + dp(17), smallPaint.apply { textAlign = Paint.Align.CENTER }) }
+            val columns = floatArrayOf(width * .05f, width * .16f, width * .29f, width * .42f, width * .54f, width * .68f, width * .82f)
+            listOf("LAP", "TEMPO", "DELTA", "S1", "V MAX", "S2", "V MIN").forEachIndexed { index, label -> canvas.drawText(label, columns[index], tableTop + dp(17), smallPaint.apply { textAlign = Paint.Align.CENTER }) }
             val dataTop = headerBottom + dp(4)
-            val rowHeight = dp(22).toFloat()
+            val rowHeight = dp(24).toFloat()
             val maxScroll = (session.laps.size * rowHeight - (height - dataTop - dp(8))).coerceAtLeast(0f)
             scroll = scroll.coerceIn(0f, maxScroll)
             session.laps.forEachIndexed { index, lap ->
@@ -1096,9 +1090,12 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 canvas.drawText(formatDelta(delta), columns[2], y, rowPaint)
                 rowPaint.color = Color.rgb(255, 205, 90)
                 canvas.drawText(lap.sectorElapsedMs.getOrNull(0)?.let(::formatTime) ?: "—", columns[3], y, rowPaint)
-                canvas.drawText(lap.sectorElapsedMs.getOrNull(1)?.let(::formatTime) ?: "—", columns[4], y, rowPaint)
-                rowPaint.color = rowColor
-                canvas.drawText(if (delta == 0L) "BEST" else if (delta < 0L) "UP" else "DOWN", columns[5], y, rowPaint)
+                rowPaint.color = Color.rgb(255, 112, 112)
+                canvas.drawText(lap.samples.maxOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[4], y, rowPaint)
+                rowPaint.color = Color.rgb(255, 205, 90)
+                canvas.drawText(lap.sectorElapsedMs.getOrNull(1)?.let(::formatTime) ?: "—", columns[5], y, rowPaint)
+                rowPaint.color = Color.rgb(72, 205, 255)
+                canvas.drawText(lap.samples.minOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[6], y, rowPaint)
             }
             if (session.laps.isEmpty()) {
                 rowPaint.color = Color.LTGRAY
