@@ -166,18 +166,20 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         trackMap = TrackMapView(this, ::handleTrackTap)
         val isPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
         val closeWidth = dp(if (isPortrait) 44 else 48)
+        val headerCellHeight = dp(40)
         // Keep a physical gap before the floating close control: overlapping cyan outlines made
         // the GPS/status panel look squeezed even though its layout width was unchanged.
         status.setPadding(dp(14), 0, dp(8), 0)
         val headerContent = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(optionsButton, LinearLayout.LayoutParams(dp(if (isPortrait) 48 else 58), dp(42)))
-            addView(brand, LinearLayout.LayoutParams(dp(if (isPortrait) 140 else 178), dp(42)).apply { setMargins(dp(4), 0, dp(4), 0) })
-            addView(status, LinearLayout.LayoutParams(0, dp(42), 1f))
+            gravity = Gravity.CENTER_VERTICAL
+            addView(optionsButton, LinearLayout.LayoutParams(dp(if (isPortrait) 48 else 58), headerCellHeight))
+            addView(brand, LinearLayout.LayoutParams(dp(if (isPortrait) 140 else 178), headerCellHeight).apply { setMargins(dp(4), 0, dp(4), 0) })
+            addView(status, LinearLayout.LayoutParams(0, headerCellHeight, 1f))
         }
         val header = FrameLayout(this).apply {
             addView(headerContent, FrameLayout.LayoutParams(-1, dp(42)).apply { rightMargin = closeWidth + dp(4) })
-            addView(closeButton, FrameLayout.LayoutParams(closeWidth, dp(42), Gravity.END or Gravity.TOP))
+            addView(closeButton, FrameLayout.LayoutParams(closeWidth, headerCellHeight, Gravity.END or Gravity.CENTER_VERTICAL))
         }
         root.addView(header, LinearLayout.LayoutParams(-1, dp(42)))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
