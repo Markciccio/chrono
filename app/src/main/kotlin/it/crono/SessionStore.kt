@@ -5,7 +5,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-data class RecordedLap(val number: Int, val durationMs: Long, val sectorElapsedMs: List<Long>)
+data class RecordedLap(
+    val number: Int,
+    val durationMs: Long,
+    val sectorElapsedMs: List<Long>,
+    val samples: List<GpsSample> = emptyList()
+)
 
 data class SavedSession(
     val id: String,
@@ -38,6 +43,17 @@ class SessionStore(context: Context) {
                         put("number", lap.number)
                         put("durationMs", lap.durationMs)
                         put("sectors", JSONArray(lap.sectorElapsedMs))
+                        put("samples", JSONArray().apply {
+                            lap.samples.forEach { sample ->
+                                put(JSONObject().apply {
+                                    put("lat", sample.lat)
+                                    put("lon", sample.lon)
+                                    put("speed", sample.speedMps)
+                                    put("accuracy", sample.accuracyM)
+                                    put("time", sample.timeMs)
+                                })
+                            }
+                        })
                     })
                 }
             })
@@ -56,10 +72,20 @@ class SessionStore(context: Context) {
         val laps = (0 until lapsJson.length()).map { index ->
             val lap = lapsJson.getJSONObject(index)
             val sectors = lap.getJSONArray("sectors")
+            val samples = lap.optJSONArray("samples")?.let { samplesJson ->
+                (0 until samplesJson.length()).map { sampleIndex ->
+                    val sample = samplesJson.getJSONObject(sampleIndex)
+                    GpsSample(
+                        sample.getDouble("lat"), sample.getDouble("lon"),
+                        sample.optDouble("speed").toFloat(), sample.optDouble("accuracy", 8.0).toFloat(), sample.getLong("time")
+                    )
+                }
+            } ?: emptyList()
             RecordedLap(
                 lap.getInt("number"),
                 lap.getLong("durationMs"),
-                (0 until sectors.length()).map { sectors.getLong(it) }
+                (0 until sectors.length()).map { sectors.getLong(it) },
+                samples
             )
         }
         return SavedSession(

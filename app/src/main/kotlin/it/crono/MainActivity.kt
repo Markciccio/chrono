@@ -67,6 +67,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var sectorReferences: List<SectorReference> = emptyList()
     private var lastAnnouncedDeltaMs: Long? = null
     private var previousLiveDeltaMs: Long? = null
+    /** A lap call has radio priority over any live-delta call. */
+    private var deltaAnnouncementsSuppressedUntilMs = Long.MIN_VALUE
     private var voiceEnabled = true
     private var voiceAlertIntervalMs = 10_000L
     private var voiceBriefingMode = VoiceBriefingMode.ALL
@@ -282,7 +284,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             return
         }
         AlertDialog.Builder(this)
-            .setTitle("Chiudere Crono?")
+            .setTitle("Chiudere Pit Engineer?")
             .setMessage("La sessione in corso verrà salvata prima di chiudere.")
             .setNegativeButton("ANNULLA", null)
             .setPositiveButton("SALVA E CHIUDI") { _, _ ->
@@ -432,9 +434,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
     /** Adds a sector at the current position; it is safe to call while a lap is running. */
     private fun addSector(center: TrackPoint) {
-        val heading = previousFix?.let { previous -> Geo.headingDeg(TrackPoint(previous.lat, previous.lon), center) }
-            ?: headingFromRoute(center)
-        val line = Geo.timingLine(center, heading)
+        val snappedCenter = snapToDrivenTrack(center)
+        val line = Geo.timingLine(snappedCenter, headingFromDrivenTrack(snappedCenter))
         val referenceElapsed = bestLap?.let { elapsedAtLine(it.samples, line) }
             ?: timing.currentLapStartMs?.let { latestFix?.timeMs?.minus(it) }
             ?: 0L
@@ -449,16 +450,17 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private fun moveSector(number: Int, center: TrackPoint) {
         val index = number - 1
         val old = sectorReferences.getOrNull(index) ?: return
-        val heading = previousFix?.let { previous -> Geo.headingDeg(TrackPoint(previous.lat, previous.lon), center) }
-            ?: old.line.allowedHeadingDeg
-        val newLine = Geo.timingLine(center, heading)
+        // Orient against the local circuit tangent, not the chord from the current GPS fix to a map tap.
+        // The latter can make a valid crossing fail the forward-direction safety check.
+        val snappedCenter = snapToDrivenTrack(center)
+        val newLine = Geo.timingLine(snappedCenter, headingFromDrivenTrack(snappedCenter, old.line.allowedHeadingDeg))
         val referenceElapsed = bestLap?.let { elapsedAtLine(it.samples, newLine) } ?: old.referenceElapsedMs
         sectorReferences = sectorReferences.mapIndexed { i, value ->
             if (i == index) value.copy(line = newLine, referenceElapsedMs = referenceElapsed ?: value.referenceElapsedMs) else value
         }
         timing.sectors = sectorReferences.map { it.line }
         trackMap.setSectors(timing.sectors)
-        status.text = "Intermedio S$number spostato"
+        status.text = "Intermedio S$number spostato · attivo subito"
         speak("Intermedio $number spostato", flush = true)
     }
 
@@ -483,6 +485,27 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val index = Geo.nearestRouteIndex(point, route)
         val before = route[(index - 1).coerceAtLeast(0)]
         val after = route[(index + 1).coerceAtMost(route.lastIndex)]
+        return Geo.headingDeg(before, after)
+    }
+
+    /** The learned/best lap is the real circuit path while recording; a GPX is only a fallback. */
+    private fun drivenTrack(): List<TrackPoint> = when {
+        (bestLap?.samples?.size ?: 0) >= 3 -> bestLap!!.samples.map { TrackPoint(it.lat, it.lon) }
+        liveRoute.size >= 3 -> liveRoute
+        else -> route
+    }
+
+    private fun snapToDrivenTrack(point: TrackPoint): TrackPoint {
+        val track = drivenTrack()
+        return track.getOrNull(Geo.nearestRouteIndex(point, track)) ?: point
+    }
+
+    private fun headingFromDrivenTrack(point: TrackPoint, fallback: Double = 0.0): Double {
+        val track = drivenTrack()
+        if (track.size < 2) return fallback
+        val index = Geo.nearestRouteIndex(point, track)
+        val before = track[(index - 1).coerceAtLeast(0)]
+        val after = track[(index + 1).coerceAtMost(track.lastIndex)]
         return Geo.headingDeg(before, after)
     }
 
@@ -542,7 +565,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     predictor = PredictiveDelta(discovery.lap.samples)
                     sectorReferences = deriveSectors(discovery.lap.samples)
                     seedBestSectorSegments(discovery.lap)
-                    recordedLaps += RecordedLap(1, discovery.lap.durationMs, sectorReferences.map { it.referenceElapsedMs })
+                    recordedLaps += RecordedLap(1, discovery.lap.durationMs, sectorReferences.map { it.referenceElapsedMs }, discovery.lap.samples)
                     timing.sectors = sectorReferences.map { it.line }
                     timing.armAt(sample, completedLapCount = 1)
                     dashboard.setTimingLine(discovery.line)
@@ -628,6 +651,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     val recordPart = if (isSegmentRecord) ". ${sectorRecordMessage(event.number, segmentMs)}" else ""
                     speak("Intermedio ${event.number}. ${spokenTime(event.elapsedMs)}$deltaPart$recordPart", flush = true)
                 }
+                // Sector calls always win over predictive-delta calls, including the samples just after it.
+                deltaAnnouncementsSuppressedUntilMs = (latestFix?.timeMs ?: System.currentTimeMillis()) + 3_000L
                 status.text = "Intermedio ${event.number}: ${formatTime(event.elapsedMs)}${delta?.let { " · ${formatDelta(it)}" } ?: ""}"
             }
             is TimingEvent.LapCompleted -> {
@@ -638,7 +663,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 val previousFinalBest = bestSectorSegmentMs[finalSegmentNumber]
                 val isFinalSegmentRecord = sectorReferences.isNotEmpty() && (previousFinalBest == null || finalSegmentMs < previousFinalBest)
                 if (isFinalSegmentRecord) bestSectorSegmentMs[finalSegmentNumber] = finalSegmentMs
-                recordedLaps += RecordedLap(event.lap.number, event.lap.durationMs, currentSectorTimes.toSortedMap().values.toList())
+                recordedLaps += RecordedLap(event.lap.number, event.lap.durationMs, currentSectorTimes.toSortedMap().values.toList(), event.lap.samples)
                 currentSectorTimes.clear()
                 // With a manually positioned finish line, make the first completed lap
                 // establish the same two default sectors as automatic discovery.
@@ -660,9 +685,12 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 }
                 val message = buildString {
                     append("Giro ${event.lap.number}. ${spokenTime(event.lap.durationMs)}.")
+                    oldBest?.let {
+                        // Announce the gap to the record on every completed lap, including a new best.
+                        append(" ${spokenDelta(event.lap.durationMs - it.durationMs)} rispetto al record.")
+                    } ?: append(" Riferimento impostato.")
                     if (isBest) append(" Miglior giro.")
                     else oldBest?.let {
-                        append(" ${spokenDelta(event.lap.durationMs - it.durationMs)}.")
                         if (event.lap.number - lastBestReminderLap >= 3) {
                             append(" Riferimento ${spokenTime(it.durationMs)}.")
                             lastBestReminderLap = event.lap.number
@@ -678,6 +706,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
                 lastAnnouncedDeltaMs = null
                 previousLiveDeltaMs = null
+                // Do not let a new-lap delta interrupt or follow the lap result immediately.
+                deltaAnnouncementsSuppressedUntilMs = (latestFix?.timeMs ?: System.currentTimeMillis()) + 5_000L
             }
         }
     }
@@ -704,7 +734,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val suddenLoss = current >= 350 && lossCooldownPassed && (
             (lastReported != null && current >= lastReported + 350) || (previous != null && current >= previous + 400)
         )
-        if (voiceBriefingMode == VoiceBriefingMode.ALL && !closeToSector && (improvingDelta || suddenLoss)) {
+        val deltaCallAllowed = sample.timeMs >= deltaAnnouncementsSuppressedUntilMs
+        if (voiceBriefingMode == VoiceBriefingMode.ALL && deltaCallAllowed && !closeToSector && (improvingDelta || suddenLoss)) {
             lastDeltaAnnouncementElapsedMs = elapsed
             val message = if (improvingDelta && current >= 0 && lastReported != null) {
                 recoveryDeltaMessage(current, lastReported, elapsed)
@@ -920,7 +951,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val pad = dp(12).toFloat()
             canvas.drawRect(0f, 0f, width.toFloat(), dp(42).toFloat(), Paint().apply { color = Color.rgb(7, 31, 41) })
             canvas.drawRect(0f, 0f, dp(5).toFloat(), dp(42).toFloat(), Paint().apply { color = Color.rgb(255, 68, 81) })
-            canvas.drawText("CRONO // ${session.displayName.uppercase(Locale.ITALIAN)}", pad, dp(20).toFloat(), headerPaint)
+            canvas.drawText("PIT ENGINEER // ${session.displayName.uppercase(Locale.ITALIAN)}", pad, dp(20).toFloat(), headerPaint)
             canvas.drawText("${SimpleDateFormat("dd MMM yyyy  HH:mm", Locale.ITALIAN).format(Date(session.startedAtMs))} · ${if (session.simulated) "SIMULAZIONE" else "GPS"}", pad, dp(34).toFloat(), smallPaint)
             headerPaint.color = Color.rgb(72, 205, 255)
             headerPaint.textAlign = Paint.Align.RIGHT
@@ -1032,6 +1063,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
         lastAnnouncedDeltaMs = null
         previousLiveDeltaMs = null
+        deltaAnnouncementsSuppressedUntilMs = Long.MIN_VALUE
         if (!keepTrack) timing.line = null
         dashboard.setTimingLine(timing.line)
         trackMap.setTimingLine(timing.line)
@@ -1257,7 +1289,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawRect(0f, 0f, dp(6).toFloat(), dp(28).toFloat(), accentPaint)
             labelPaint.color = Color.rgb(218, 229, 235)
             labelPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("CRONO  //  LIVE TIMING", pad + dp(8), dp(20).toFloat(), labelPaint)
+            canvas.drawText("PIT ENGINEER  //  LIVE TIMING", pad + dp(8), dp(20).toFloat(), labelPaint)
             labelPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText("GIRO $lapNumber", width - pad, dp(20).toFloat(), labelPaint)
             if (recording) {
@@ -1291,8 +1323,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             drawTimingRow(canvas, dp(130).toFloat(), "S1", sectorTexts[1] ?: "--:--.---", Color.rgb(70, 205, 255), rowText, valueText, panelPaint)
             drawTimingRow(canvas, dp(169).toFloat(), "S2", sectorTexts[2] ?: "--:--.---", Color.rgb(255, 185, 64), rowText, valueText, darkPanelPaint)
 
-            val cardTop = dp(215).toFloat()
-            val cardBottom = dp(270).toFloat()
+            // Extra vertical space keeps label and large time separate on compact Pixel screens.
+            val cardTop = dp(210).toFloat()
+            val cardBottom = dp(278).toFloat()
             val gap = dp(7).toFloat()
             val mid = width / 2f
             canvas.drawRoundRect(pad, cardTop, mid - gap, cardBottom, dp(4).toFloat(), dp(4).toFloat(), darkPanelPaint)
@@ -1300,12 +1333,12 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawRect(pad, cardTop, pad + dp(5), cardBottom, Paint().apply { color = Color.rgb(238, 245, 247) })
             canvas.drawRect(mid + gap, cardTop, mid + gap + dp(5), cardBottom, Paint().apply { color = green })
             labelPaint.textAlign = Paint.Align.CENTER
-            canvas.drawText("LAST LAP", (pad + mid - gap) / 2f, cardTop + dp(22), labelPaint)
-            canvas.drawText(last?.let(::formatTime) ?: "--:--.---", (pad + mid - gap) / 2f, cardBottom - dp(18), lastPaint)
-            canvas.drawText("CURRENT LAP", (mid + gap + width - pad) / 2f, cardTop + dp(22), labelPaint)
+            canvas.drawText("LAST LAP", (pad + mid - gap) / 2f, cardTop + dp(17), labelPaint)
+            canvas.drawText(last?.let(::formatTime) ?: "--:--.---", (pad + mid - gap) / 2f, cardBottom - dp(10), lastPaint)
+            canvas.drawText("CURRENT LAP", (mid + gap + width - pad) / 2f, cardTop + dp(17), labelPaint)
             val currentTime = elapsed?.let(::formatTime) ?: "--:--.---"
             lastPaint.color = Color.rgb(238, 245, 247)
-            canvas.drawText(currentTime, (mid + gap + width - pad) / 2f, cardBottom - dp(18), lastPaint)
+            canvas.drawText(currentTime, (mid + gap + width - pad) / 2f, cardBottom - dp(10), lastPaint)
             primaryPaint.textAlign = Paint.Align.CENTER
             primaryPaint.textSize = dp(48).toFloat()
             deltaPaint.textAlign = Paint.Align.CENTER
