@@ -192,7 +192,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         startButton = actionButton("AVVIA") { toggleSession() }
         firstControlRow.addView(startButton, controlParams(1f))
         control(firstControlRow, "SPOSTA TRAGUARDO", 1f) { setTimingLineAtCurrentFix() }
-        control(secondControlRow, "SECTOR", 1f) { showMoveSectorMenu() }
+        control(secondControlRow, "SPOSTA SETTORE", 1f) { showMoveSectorMenu() }
         testButton = actionButton("TEST GPS") { toggleSimulation() }
         secondControlRow.addView(testButton, controlParams(1f))
         controls.addView(firstControlRow, LinearLayout.LayoutParams(-1, dp(39)))
@@ -996,7 +996,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.ITALIAN)
         val labels = sessions.map { session ->
             val best = session.laps.minOfOrNull { it.durationMs }?.let(::formatTime) ?: "nessun giro"
-            "${session.displayName} · best $best"
+            "${session.displayName} · ${session.laps.size} giri · best $best"
         }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Storico sessioni")
