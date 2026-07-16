@@ -191,7 +191,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
         startButton = actionButton("AVVIA") { toggleSession() }
         firstControlRow.addView(startButton, controlParams(1f))
-        control(firstControlRow, "TRAGUARDO", 1f) { setTimingLineAtCurrentFix() }
+        control(firstControlRow, "SPOSTA TRAGUARDO", 1f) { setTimingLineAtCurrentFix() }
         control(secondControlRow, "SECTOR", 1f) { showMoveSectorMenu() }
         testButton = actionButton("TEST GPS") { toggleSimulation() }
         secondControlRow.addView(testButton, controlParams(1f))
@@ -251,7 +251,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             menu.add("Dimensione live timing")
             menu.add("Orientamento schermo")
             menu.add("Inquadra tutta la traccia")
-            menu.add("Storico sessioni")
             setOnMenuItemClickListener { item ->
                 when (item.title.toString()) {
                     "Voce: attiva", "Voce: disattivata" -> {
@@ -267,7 +266,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                         trackMap.fitEntireTrack()
                         status.text = "Mappa adattata alla traccia"
                     }
-                    "Storico sessioni" -> showSessionHistory()
                 }
                 true
             }
@@ -603,7 +601,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         if (!running) {
             resetSession(keepTrack = true)
             running = true
-            startButton?.text = "REGISTRAZIONE AVVIATA"
+            startButton?.text = "FERMA"
             startGps()
             if (timing.line == null) {
                 status.text = "Registrazione attiva · primo giro in apprendimento"
@@ -686,7 +684,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
     private fun toggleSimulation() {
         if (simulator != null) {
-            status.text = "Test già attivo · premi REGISTRAZIONE AVVIATA per fermarlo"
+            status.text = "Test già attivo · premi FERMA per interromperlo"
             return
         }
         val fix = latestFix
@@ -698,7 +696,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         resetSession()
         simulator = DebugGpsSimulator(TrackPoint(fix.lat, fix.lon), System.currentTimeMillis())
         running = true
-        startButton?.text = "REGISTRAZIONE AVVIATA"
+        startButton?.text = "FERMA"
         testButton?.text = "TEST ATTIVO"
         status.text = "TEST GPS · giro simulato in apprendimento"
         speak("Test GPS avviato. Primo giro simulato in apprendimento", flush = true)
@@ -1449,6 +1447,21 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val currentTime = elapsed?.let(::formatTime) ?: "--:--.---"
             lastPaint.color = Color.rgb(238, 245, 247)
             canvas.drawText(currentTime, (mid + gap + width - pad) / 2f, cardBottom - dp(10), lastPaint)
+
+            val sessionsRight = width - dp(14).toFloat()
+            val sessionsBottom = height - dp(14).toFloat()
+            val sessionsLeft = sessionsRight - dp(118)
+            val sessionsTop = sessionsBottom - dp(38)
+            val sessionsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(7, 31, 41) }
+            canvas.drawRoundRect(sessionsLeft, sessionsTop, sessionsRight, sessionsBottom, dp(5).toFloat(), dp(5).toFloat(), sessionsPaint)
+            sessionsPaint.style = Paint.Style.STROKE
+            sessionsPaint.strokeWidth = dp(1).toFloat()
+            sessionsPaint.color = Color.rgb(72, 205, 255)
+            canvas.drawRoundRect(sessionsLeft, sessionsTop, sessionsRight, sessionsBottom, dp(5).toFloat(), dp(5).toFloat(), sessionsPaint)
+            labelPaint.color = Color.rgb(72, 205, 255)
+            labelPaint.textAlign = Paint.Align.CENTER
+            canvas.drawText("SESSIONI", (sessionsLeft + sessionsRight) / 2f, sessionsTop + dp(24), labelPaint)
+
             primaryPaint.textAlign = Paint.Align.CENTER
             primaryPaint.textSize = timingTextSize(48)
             deltaPaint.textAlign = Paint.Align.CENTER
@@ -1485,12 +1498,16 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     if (abs(event.x - downX) > dp(8) || abs(event.y - downY) > dp(8)) dragged = true
                     panX += dx; panY += dy; lastX = event.x; lastY = event.y; invalidate()
                 }
-                MotionEvent.ACTION_UP -> if (!dragged && !scaleDetector.isInProgress && track.isNotEmpty()) {
-                    onTrackTapped?.invoke(pointAt(event.x, event.y))
+                MotionEvent.ACTION_UP -> if (!dragged && !scaleDetector.isInProgress) {
+                    if (isSessionsButton(event.x, event.y)) showSessionHistory()
+                    else if (track.isNotEmpty()) onTrackTapped?.invoke(pointAt(event.x, event.y))
                 }
             }
             return true
         }
+
+        private fun isSessionsButton(x: Float, y: Float): Boolean =
+            x >= width - dp(132) && x <= width - dp(14) && y >= height - dp(52) && y <= height - dp(14)
 
         private fun ensurePath() {
             if (path != null && cachedWidth == width && cachedHeight == height) return
