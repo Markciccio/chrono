@@ -67,7 +67,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var lastAnnouncedDeltaMs: Long? = null
     private var previousLiveDeltaMs: Long? = null
     private var voiceEnabled = true
-    private var voiceAlertIntervalMs = 5_000L
+    private var voiceAlertIntervalMs = 10_000L
     private var voiceBriefingMode = VoiceBriefingMode.ALL
     private val simulationHandler = Handler(Looper.getMainLooper())
     private var simulator: DebugGpsSimulator? = null
