@@ -33,6 +33,7 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.Window
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
@@ -162,12 +163,19 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
         trackMap = TrackMapView(this, ::handleTrackTap)
         val isPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
-        val header = LinearLayout(this).apply {
+        val closeWidth = dp(if (isPortrait) 44 else 48)
+        // The header contents keep their full width; the close control floats above the far right
+        // instead of claiming a fourth column and shifting the information panel.
+        status.setPadding(dp(14), 0, closeWidth + dp(8), 0)
+        val headerContent = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(optionsButton, LinearLayout.LayoutParams(dp(if (isPortrait) 48 else 58), dp(42)))
             addView(brand, LinearLayout.LayoutParams(dp(if (isPortrait) 140 else 178), dp(42)).apply { setMargins(dp(4), 0, dp(4), 0) })
             addView(status, LinearLayout.LayoutParams(0, dp(42), 1f))
-            addView(closeButton, LinearLayout.LayoutParams(dp(if (isPortrait) 44 else 48), dp(42)).apply { setMargins(dp(4), 0, 0, 0) })
+        }
+        val header = FrameLayout(this).apply {
+            addView(headerContent, FrameLayout.LayoutParams(-1, dp(42)))
+            addView(closeButton, FrameLayout.LayoutParams(closeWidth, dp(42), Gravity.END or Gravity.TOP))
         }
         root.addView(header, LinearLayout.LayoutParams(-1, dp(42)))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
