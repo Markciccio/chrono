@@ -127,9 +127,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             setOnClickListener { requestClose() }
         }
         dashboard = RaceView().apply {
-            onTrackTapped = { tapped -> if (!running) handleTrackTap(tapped) }
+            onTrackTapped = ::handleTrackTap
         }
-        trackMap = TrackMapView(this) { tapped -> if (!running) handleTrackTap(tapped) }
+        trackMap = TrackMapView(this, ::handleTrackTap)
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(optionsButton, LinearLayout.LayoutParams(dp(58), dp(42)))
@@ -400,8 +400,13 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val line = timing.sectors[index]
             Geo.distanceM(tapped.lat, tapped.lon, (line.pointA.lat + line.pointB.lat) / 2.0, (line.pointA.lon + line.pointB.lon) / 2.0)
         } ?: Double.MAX_VALUE
-        if (nearestSector != null && sectorDistance <= 45.0) moveSector(nearestSector + 1, tapped)
-        else setTimingLineAtMapPoint(tapped)
+        if (nearestSector != null && sectorDistance <= 50.0) {
+            moveSector(nearestSector + 1, tapped)
+        } else if (!running) {
+            setTimingLineAtMapPoint(tapped)
+        } else {
+            status.text = "Tocca vicino a un intermedio per spostarlo"
+        }
     }
 
     private fun showMoveSectorMenu() {
@@ -618,6 +623,14 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 lastLapMs = event.lap.durationMs
                 recordedLaps += RecordedLap(event.lap.number, event.lap.durationMs, currentSectorTimes.toSortedMap().values.toList())
                 currentSectorTimes.clear()
+                // With a manually positioned finish line, make the first completed lap
+                // establish the same two default sectors as automatic discovery.
+                val defaultSectorsAdded = if (sectorReferences.isEmpty()) {
+                    sectorReferences = deriveSectors(event.lap.samples)
+                    timing.sectors = sectorReferences.map { it.line }
+                    trackMap.setSectors(timing.sectors)
+                    sectorReferences.size == 2
+                } else false
                 val oldBest = bestLap
                 val isBest = oldBest == null || event.lap.durationMs < oldBest.durationMs
                 if (isBest) {
@@ -632,7 +645,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     else oldBest?.let { append(" ${spokenDelta(event.lap.durationMs - it.durationMs)}.") }
                 }
                 speak(message, flush = true)
-                status.text = if (isBest) "Giro ${event.lap.number}: miglior giro ${formatTime(event.lap.durationMs)}" else "Giro ${event.lap.number}: ${formatTime(event.lap.durationMs)}"
+                val sectorNotice = if (defaultSectorsAdded) " · S1 e S2 automatici pronti" else ""
+                status.text = if (isBest) "Giro ${event.lap.number}: miglior giro ${formatTime(event.lap.durationMs)}$sectorNotice" else "Giro ${event.lap.number}: ${formatTime(event.lap.durationMs)}$sectorNotice"
                 predictor?.reset()
                 dashboard.clearSectorResult()
                 lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
