@@ -95,6 +95,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private val currentSectorTimes = linkedMapOf<Int, Long>()
     /** Best duration for each individual segment, independent from the best full lap. */
     private val bestSectorSegmentMs = mutableMapOf<Int, Long>()
+    /** Sectors added without a usable baseline must not be announced as purple on their first pass. */
+    private val pendingSectorBaseline = mutableSetOf<Int>()
     private val simulationTick = object : Runnable {
         override fun run() {
             val activeSimulator = simulator ?: return
@@ -518,6 +520,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             ?: 0L
         val number = sectorReferences.size + 1
         sectorReferences = sectorReferences + SectorReference(number, line, referenceElapsed)
+        pendingSectorBaseline += number
         timing.sectors = sectorReferences.map { it.line }
         trackMap.setSectors(timing.sectors)
         status.text = "Sector S$number aggiunto${if (running) " · attivo da questo giro" else ""}"
@@ -535,10 +538,18 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         sectorReferences = sectorReferences.mapIndexed { i, value ->
             if (i == index) value.copy(line = newLine, referenceElapsedMs = referenceElapsed ?: value.referenceElapsedMs) else value
         }
+        // The old split was measured on a different physical line. Rebuild every segment baseline
+        // from the best lap on the new geometry, then clear the currently shown old split.
+        bestLap?.let { seedBestSectorSegments(it) } ?: run {
+            bestSectorSegmentMs.clear()
+            pendingSectorBaseline += number
+        }
+        currentSectorTimes.clear()
+        dashboard.clearSectorResult()
         timing.sectors = sectorReferences.map { it.line }
         trackMap.setSectors(timing.sectors)
-        status.text = "Sector S$number spostato · attivo subito"
-        speak("Settore $number spostato", flush = true)
+        status.text = "Sector S$number spostato · tempi ricalibrati"
+        speak("Settore $number spostato. Tempi ricalibrati", flush = true)
     }
 
     private fun elapsedAtLine(samples: List<GpsSample>, line: TimingLine): Long? {
@@ -713,8 +724,12 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 val previousElapsed = currentSectorTimes[event.number - 1] ?: 0L
                 val segmentMs = (event.elapsedMs - previousElapsed).coerceAtLeast(0L)
                 val previousBestSegment = bestSectorSegmentMs[event.number]
-                val isSegmentRecord = previousBestSegment == null || segmentMs < previousBestSegment
+                val isSegmentRecord = previousBestSegment != null && segmentMs < previousBestSegment
                 if (isSegmentRecord) bestSectorSegmentMs[event.number] = segmentMs
+                if (previousBestSegment == null) {
+                    bestSectorSegmentMs[event.number] = segmentMs
+                    pendingSectorBaseline -= event.number
+                }
                 currentSectorTimes[event.number] = event.elapsedMs
                 val reference = sectorReferences.getOrNull(event.number - 1)?.referenceElapsedMs
                 val delta = reference?.let { event.elapsedMs - it }
@@ -739,8 +754,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 val finalSegmentStart = currentSectorTimes[sectorReferences.size] ?: 0L
                 val finalSegmentMs = (event.lap.durationMs - finalSegmentStart).coerceAtLeast(0L)
                 val previousFinalBest = bestSectorSegmentMs[finalSegmentNumber]
-                val isFinalSegmentRecord = sectorReferences.isNotEmpty() && (previousFinalBest == null || finalSegmentMs < previousFinalBest)
+                val isFinalSegmentRecord = sectorReferences.isNotEmpty() && previousFinalBest != null && finalSegmentMs < previousFinalBest
                 if (isFinalSegmentRecord) bestSectorSegmentMs[finalSegmentNumber] = finalSegmentMs
+                if (previousFinalBest == null && sectorReferences.isNotEmpty()) bestSectorSegmentMs[finalSegmentNumber] = finalSegmentMs
                 recordedLaps += RecordedLap(event.lap.number, event.lap.durationMs, currentSectorTimes.toSortedMap().values.toList(), event.lap.samples)
                 currentSectorTimes.clear()
                 // With a manually positioned finish line, make the first completed lap
@@ -870,6 +886,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
     private fun seedBestSectorSegments(lap: Lap) {
         bestSectorSegmentMs.clear()
+        pendingSectorBaseline.clear()
         var previousElapsed = 0L
         sectorReferences.forEachIndexed { index, reference ->
             bestSectorSegmentMs[index + 1] = (reference.referenceElapsedMs - previousElapsed).coerceAtLeast(0L)
@@ -1132,6 +1149,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         recordedLaps.clear()
         currentSectorTimes.clear()
         bestSectorSegmentMs.clear()
+        pendingSectorBaseline.clear()
         trackMap.setTrack(emptyList())
         bestLap = null
         predictor = null
@@ -1356,7 +1374,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
         override fun onDraw(canvas: Canvas) {
             canvas.drawColor(Color.rgb(5, 16, 23))
-            canvas.drawRoundRect(dp(2).toFloat(), dp(2).toFloat(), width - dp(2).toFloat(), height - dp(2).toFloat(), dp(9).toFloat(), dp(9).toFloat(), hudStrokePaint)
             val pad = dp(12).toFloat()
             val fullWidth = width - pad * 2
             val red = Color.rgb(238, 50, 62)
@@ -1434,6 +1451,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             bestPaint.textSize = timingTextSize(22)
             labelPaint.color = Color.rgb(112, 157, 174)
             labelPaint.textAlign = Paint.Align.CENTER
+            // Draw the outer frame last: the top live-timing bar otherwise paints over its top edge.
+            canvas.drawRoundRect(dp(2).toFloat(), dp(2).toFloat(), width - dp(2).toFloat(), height - dp(2).toFloat(), dp(9).toFloat(), dp(9).toFloat(), hudStrokePaint)
         }
 
         private fun drawTimingRow(
