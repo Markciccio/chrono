@@ -64,13 +64,14 @@ class TrackMapView(context: Context, private val onTrackTap: (TrackPoint) -> Uni
             }
             evaluateJavascript("window.setTrack($values)", null)
         }
-        queuedFix?.let { evaluateJavascript("window.setFix(${it.lat},${it.lon})", null) }
         queuedLine?.let {
             evaluateJavascript("window.setLine([[${it.pointA.lat},${it.pointA.lon}],[${it.pointB.lat},${it.pointB.lon}]])", null)
         } ?: evaluateJavascript("window.setLine(null)", null)
         val sectors = JSONArray()
         queuedSectors.forEach { sectors.put(JSONArray().put(JSONArray().put(it.pointA.lat).put(it.pointA.lon)).put(JSONArray().put(it.pointB.lat).put(it.pointB.lon))) }
         evaluateJavascript("window.setSectors($sectors)", null)
+        // Render the current position last so it is always above route, finish and sectors.
+        queuedFix?.let { evaluateJavascript("window.setFix(${it.lat},${it.lon})", null) }
     }
 
     private inner class Bridge {
@@ -93,7 +94,7 @@ window.clearTrack=function(){if(track){map.removeLayer(track);track=null;}hasFit
 window.setTrack=function(points){if(track)map.removeLayer(track);track=L.polyline(points,{color:'#32a9ff',weight:4}).addTo(map);};
 window.fitEntireTrack=function(){if(track){map.fitBounds(track.getBounds(),{padding:[42,42],maxZoom:18});hasFit=true;}};
 window.refreshMap=function(){map.invalidateSize(false);};
-window.setFix=function(lat,lon){if(!fix){fix=L.circleMarker([lat,lon],{radius:7,color:'#fff',weight:2,fillColor:'#f33',fillOpacity:1}).addTo(map);if(!hasFit)map.setView([lat,lon],17);}else fix.setLatLng([lat,lon]);};
+window.setFix=function(lat,lon){if(!fix){fix=L.circleMarker([lat,lon],{radius:7,color:'#fff',weight:2,fillColor:'#f33',fillOpacity:1}).addTo(map);if(!hasFit)map.setView([lat,lon],17);}else fix.setLatLng([lat,lon]);fix.bringToFront();};
 window.setLine=function(points){if(line)map.removeLayer(line);line=null;if(points)line=L.polyline(points,{color:'#ffe000',weight:6}).addTo(map);};
 window.setSectors=function(sectors){sectorLines.forEach(s=>map.removeLayer(s));sectorLines=sectors.map((points,index)=>L.polyline(points,{color:index===0?'#ff9f1c':'#b983ff',weight:5,dashArray:'8 7'}).addTo(map));};
 map.on('click',function(e){if(window.Crono)Crono.onMapTap(e.latlng.lat,e.latlng.lng);});

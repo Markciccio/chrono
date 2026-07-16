@@ -61,5 +61,41 @@ class TimingEngineTest {
         assertTrue(discovery!!.lap.durationMs in 75_000..110_000)
     }
 
+    @Test fun `simulator reports both automatic sectors after loop discovery`() {
+        val simulator = DebugGpsSimulator(TrackPoint(45.0, 9.0), 0)
+        val detector = AutoFinishDetector(minimumLoopMs = 20_000, proximityM = 12.0)
+        var discovery: AutoFinishDetector.Discovery? = null
+        var last: GpsSample? = null
+        repeat(400) {
+            val sample = simulator.next()
+            last = sample
+            discovery = detector.process(sample) ?: discovery
+            if (discovery != null) return@repeat
+        }
+        val found = discovery ?: throw AssertionError("Loop not discovered")
+        val samples = found.lap.samples
+        fun sectorAt(fraction: Double): TimingLine {
+            val index = (samples.lastIndex * fraction).toInt().coerceIn(1, samples.lastIndex - 1)
+            val point = samples[index]
+            return Geo.timingLine(
+                TrackPoint(point.lat, point.lon),
+                Geo.headingDeg(TrackPoint(samples[index - 1].lat, samples[index - 1].lon), TrackPoint(samples[index + 1].lat, samples[index + 1].lon))
+            )
+        }
+        val engine = TimingEngine().apply {
+            line = found.line
+            sectors = listOf(sectorAt(1.0 / 3.0), sectorAt(2.0 / 3.0))
+            armAt(last!!, completedLapCount = 1)
+        }
+        val detectedSectors = mutableSetOf<Int>()
+        repeat(300) {
+            when (val event = engine.process(simulator.next())) {
+                is TimingEvent.SectorCompleted -> detectedSectors += event.number
+                else -> Unit
+            }
+        }
+        assertEquals(setOf(1, 2), detectedSectors)
+    }
+
     private fun sample(lat: Double, lon: Double, time: Long) = GpsSample(lat, lon, 10f, 3f, time)
 }

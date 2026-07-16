@@ -58,6 +58,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var bestLap: Lap? = null
     private var predictor: PredictiveDelta? = null
     private var lastLapMs: Long? = null
+    private var lastBestReminderLap = 0
     private var liveDeltaMs: Long? = null
     private var lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
     private val autoFinish = AutoFinishDetector()
@@ -76,6 +77,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private lateinit var sessionStore: SessionStore
     private val recordedLaps = mutableListOf<RecordedLap>()
     private val currentSectorTimes = linkedMapOf<Int, Long>()
+    /** Best duration for each individual segment, independent from the best full lap. */
+    private val bestSectorSegmentMs = mutableMapOf<Int, Long>()
     private val simulationTick = object : Runnable {
         override fun run() {
             val activeSimulator = simulator ?: return
@@ -362,6 +365,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         liveDeltaMs = null
         recordedLaps.clear()
         currentSectorTimes.clear()
+        bestSectorSegmentMs.clear()
         autoFinish.reset()
         dashboard.setTimingLine(timing.line)
         trackMap.setTimingLine(timing.line)
@@ -537,6 +541,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     bestLap = discovery.lap
                     predictor = PredictiveDelta(discovery.lap.samples)
                     sectorReferences = deriveSectors(discovery.lap.samples)
+                    seedBestSectorSegments(discovery.lap)
                     recordedLaps += RecordedLap(1, discovery.lap.durationMs, sectorReferences.map { it.referenceElapsedMs })
                     timing.sectors = sectorReferences.map { it.line }
                     timing.armAt(sample, completedLapCount = 1)
@@ -605,6 +610,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 speak("Cronometro armato", flush = true)
             }
             is TimingEvent.SectorCompleted -> {
+                val previousElapsed = currentSectorTimes[event.number - 1] ?: 0L
+                val segmentMs = (event.elapsedMs - previousElapsed).coerceAtLeast(0L)
+                val previousBestSegment = bestSectorSegmentMs[event.number]
+                val isSegmentRecord = previousBestSegment == null || segmentMs < previousBestSegment
+                if (isSegmentRecord) bestSectorSegmentMs[event.number] = segmentMs
                 currentSectorTimes[event.number] = event.elapsedMs
                 val reference = sectorReferences.getOrNull(event.number - 1)?.referenceElapsedMs
                 val delta = reference?.let { event.elapsedMs - it }
@@ -615,12 +625,19 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 dashboard.setSectorResult(event.number, event.elapsedMs, delta)
                 val deltaPart = delta?.let { ". ${spokenDelta(it)}" } ?: ""
                 if (voiceBriefingMode != VoiceBriefingMode.LAPS_ONLY) {
-                    speak("Intermedio ${event.number}. ${spokenTime(event.elapsedMs)}$deltaPart", flush = true)
+                    val recordPart = if (isSegmentRecord) ". ${sectorRecordMessage(event.number, segmentMs)}" else ""
+                    speak("Intermedio ${event.number}. ${spokenTime(event.elapsedMs)}$deltaPart$recordPart", flush = true)
                 }
                 status.text = "Intermedio ${event.number}: ${formatTime(event.elapsedMs)}${delta?.let { " · ${formatDelta(it)}" } ?: ""}"
             }
             is TimingEvent.LapCompleted -> {
                 lastLapMs = event.lap.durationMs
+                val finalSegmentNumber = sectorReferences.size + 1
+                val finalSegmentStart = currentSectorTimes[sectorReferences.size] ?: 0L
+                val finalSegmentMs = (event.lap.durationMs - finalSegmentStart).coerceAtLeast(0L)
+                val previousFinalBest = bestSectorSegmentMs[finalSegmentNumber]
+                val isFinalSegmentRecord = sectorReferences.isNotEmpty() && (previousFinalBest == null || finalSegmentMs < previousFinalBest)
+                if (isFinalSegmentRecord) bestSectorSegmentMs[finalSegmentNumber] = finalSegmentMs
                 recordedLaps += RecordedLap(event.lap.number, event.lap.durationMs, currentSectorTimes.toSortedMap().values.toList())
                 currentSectorTimes.clear()
                 // With a manually positioned finish line, make the first completed lap
@@ -629,6 +646,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     sectorReferences = deriveSectors(event.lap.samples)
                     timing.sectors = sectorReferences.map { it.line }
                     trackMap.setSectors(timing.sectors)
+                    seedBestSectorSegments(event.lap)
                     sectorReferences.size == 2
                 } else false
                 val oldBest = bestLap
@@ -638,11 +656,19 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     predictor = PredictiveDelta(event.lap.samples)
                     updateSectorReferencesForBestLap(event.lap)
                     liveDeltaMs = null
+                    lastBestReminderLap = event.lap.number
                 }
                 val message = buildString {
                     append("Giro ${event.lap.number}. ${spokenTime(event.lap.durationMs)}.")
                     if (isBest) append(" Miglior giro.")
-                    else oldBest?.let { append(" ${spokenDelta(event.lap.durationMs - it.durationMs)}.") }
+                    else oldBest?.let {
+                        append(" ${spokenDelta(event.lap.durationMs - it.durationMs)}.")
+                        if (event.lap.number - lastBestReminderLap >= 3) {
+                            append(" Riferimento ${spokenTime(it.durationMs)}.")
+                            lastBestReminderLap = event.lap.number
+                        }
+                    }
+                    if (isFinalSegmentRecord) append(" ${finalSectorRecordMessage(finalSegmentMs)}.")
                 }
                 speak(message, flush = true)
                 val sectorNotice = if (defaultSectorsAdded) " · S1 e S2 automatici pronti" else ""
@@ -732,6 +758,26 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             reference.copy(referenceElapsedMs = elapsedAtLine(lap.samples, reference.line) ?: reference.referenceElapsedMs)
         }
     }
+
+    private fun seedBestSectorSegments(lap: Lap) {
+        bestSectorSegmentMs.clear()
+        var previousElapsed = 0L
+        sectorReferences.forEachIndexed { index, reference ->
+            bestSectorSegmentMs[index + 1] = (reference.referenceElapsedMs - previousElapsed).coerceAtLeast(0L)
+            previousElapsed = reference.referenceElapsedMs
+        }
+        if (sectorReferences.isNotEmpty()) {
+            bestSectorSegmentMs[sectorReferences.size + 1] = (lap.durationMs - previousElapsed).coerceAtLeast(0L)
+        }
+    }
+
+    private fun sectorRecordMessage(number: Int, segmentMs: Long) = when (number) {
+        1 -> "S uno record. ${spokenTime(segmentMs)}"
+        2 -> "Tratto S uno S due record. ${spokenTime(segmentMs)}"
+        else -> "Tratto dopo S${number - 1} record. ${spokenTime(segmentMs)}"
+    }
+
+    private fun finalSectorRecordMessage(segmentMs: Long) = "Ultimo settore record. ${spokenTime(segmentMs)}"
 
     private fun saveCurrentSession(): String? {
         if (simulator != null || sessionSamples.size < 2) return null
@@ -976,6 +1022,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         sessionSamples.clear()
         recordedLaps.clear()
         currentSectorTimes.clear()
+        bestSectorSegmentMs.clear()
         trackMap.setTrack(emptyList())
         bestLap = null
         predictor = null
@@ -990,6 +1037,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         trackMap.setTimingLine(timing.line)
         trackMap.setSectors(emptyList())
         lastLapMs = null
+        lastBestReminderLap = 0
         dashboard.setLiveData(latestFix, null, null, 1, null, null, false)
         if (!keepTrack) status.text = "Cronometro azzerato"
     }
@@ -1219,21 +1267,21 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 labelPaint.color = Color.rgb(112, 157, 174)
             }
 
-            val time = elapsed?.let(::formatTime) ?: "--:--.---"
             canvas.drawRoundRect(pad, dp(38).toFloat(), width - pad, dp(98).toFloat(), dp(4).toFloat(), dp(4).toFloat(), panelPaint)
             canvas.drawRect(pad, dp(38).toFloat(), pad + dp(6), dp(98).toFloat(), accentPaint)
             labelPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("CURRENT LAP", pad + dp(18), dp(58).toFloat(), labelPaint)
-            primaryPaint.textAlign = Paint.Align.LEFT
-            primaryPaint.textSize = dp(35).toFloat()
-            canvas.drawText(time, pad + dp(18), dp(91).toFloat(), primaryPaint)
-            labelPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("DELTA vs BEST", width - pad - dp(18), dp(58).toFloat(), labelPaint)
+            canvas.drawText("DELTA vs RIFERIMENTO", pad + dp(18), dp(58).toFloat(), labelPaint)
             val deltaText = delta?.let { if (it < 0) "▲ ${formatDelta(it)}" else "▼ ${formatDelta(it)}" } ?: "± 0.00"
             deltaPaint.color = deltaColor
-            deltaPaint.textAlign = Paint.Align.RIGHT
-            deltaPaint.textSize = dp(25).toFloat()
-            canvas.drawText(deltaText, width - pad - dp(18), dp(89).toFloat(), deltaPaint)
+            deltaPaint.textAlign = Paint.Align.LEFT
+            deltaPaint.textSize = dp(34).toFloat()
+            canvas.drawText(deltaText, pad + dp(18), dp(91).toFloat(), deltaPaint)
+            labelPaint.textAlign = Paint.Align.RIGHT
+            canvas.drawText("BEST LAP · RIFERIMENTO", width - pad - dp(18), dp(58).toFloat(), labelPaint)
+            bestPaint.color = Color.rgb(69, 223, 123)
+            bestPaint.textAlign = Paint.Align.RIGHT
+            bestPaint.textSize = dp(29).toFloat()
+            canvas.drawText(best?.let(::formatTime) ?: "--:--.---", width - pad - dp(18), dp(91).toFloat(), bestPaint)
 
             canvas.drawRect(pad, dp(106).toFloat(), width - pad, dp(128).toFloat(), darkPanelPaint)
             labelPaint.textAlign = Paint.Align.LEFT
@@ -1254,13 +1302,16 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             labelPaint.textAlign = Paint.Align.CENTER
             canvas.drawText("LAST LAP", (pad + mid - gap) / 2f, cardTop + dp(22), labelPaint)
             canvas.drawText(last?.let(::formatTime) ?: "--:--.---", (pad + mid - gap) / 2f, cardBottom - dp(18), lastPaint)
-            canvas.drawText("BEST LAP", (mid + gap + width - pad) / 2f, cardTop + dp(22), labelPaint)
-            bestPaint.color = green
-            canvas.drawText(best?.let(::formatTime) ?: "--:--.---", (mid + gap + width - pad) / 2f, cardBottom - dp(18), bestPaint)
+            canvas.drawText("CURRENT LAP", (mid + gap + width - pad) / 2f, cardTop + dp(22), labelPaint)
+            val currentTime = elapsed?.let(::formatTime) ?: "--:--.---"
+            lastPaint.color = Color.rgb(238, 245, 247)
+            canvas.drawText(currentTime, (mid + gap + width - pad) / 2f, cardBottom - dp(18), lastPaint)
             primaryPaint.textAlign = Paint.Align.CENTER
             primaryPaint.textSize = dp(48).toFloat()
             deltaPaint.textAlign = Paint.Align.CENTER
             deltaPaint.textSize = dp(25).toFloat()
+            bestPaint.textAlign = Paint.Align.CENTER
+            bestPaint.textSize = dp(22).toFloat()
             labelPaint.color = Color.rgb(112, 157, 174)
             labelPaint.textAlign = Paint.Align.CENTER
         }
