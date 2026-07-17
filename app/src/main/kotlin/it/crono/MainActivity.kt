@@ -2287,6 +2287,14 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val averageVmax = summaries.values.map { it.maxKmh }.average().toInt()
         val brakingRange = summaries.values.map { it.brakingMinKmh }.let { (it.maxOrNull() ?: 0) - (it.minOrNull() ?: 0) }
         val exitRange = summaries.values.map { it.accelerationMaxKmh }.let { (it.maxOrNull() ?: 0) - (it.minOrNull() ?: 0) }
+        val gpsAccuracy = session.samples.map { it.accuracyM }.filter { it.isFinite() && it > 0f }.average()
+        val bestSectorMargins = segmentBests.mapIndexed { index, record ->
+            val bestValue = record?.second ?: 0L
+            val gaps = splitRows.mapNotNull { it.second.getOrNull(index)?.takeIf { value -> value > 0 }?.minus(bestValue) }
+            gaps.count { it >= 500L }
+        }
+        val improvingLaps = laps.zipWithNext().count { (previous, current) -> current.durationMs < previous.durationMs }
+        val firstBestLap = laps.firstOrNull { it.durationMs == best.durationMs }
         return buildString {
             append("ANALISI INGEGNERE — SESSIONE\n")
             append("${session.displayName.uppercase(Locale.ITALIAN)}\n\n")
@@ -2296,6 +2304,20 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             append("Media: ${formatTime(average)}  · dispersione: ${formatTime(spread)}\n")
             append("Costanza: deviazione media ${formatTime(standardDeviation)}\n")
             if (ideal > 0) append("Ideal lap: ${formatTime(ideal)}  · potenziale ${formatDelta(ideal - best.durationMs)}\n")
+            if (gpsAccuracy > 0.0) append("Qualità GPS media: ±${gpsAccuracy.toInt()} m · ${session.samples.size} punti registrati\n")
+            append("Progressione: $improvingLaps miglioramenti tra giri consecutivi · best ottenuto al lap ${firstBestLap?.number ?: best.number}\n")
+            append("\nGIRO PER GIRO\n")
+            laps.forEach { lap ->
+                val summary = summaries[lap] ?: speedSummary(lap)
+                val delta = lap.durationMs - best.durationMs
+                val splits = splitRows.firstOrNull { it.first == lap }?.second.orEmpty()
+                val splitText = splits.mapIndexedNotNull { index, value ->
+                    value.takeIf { it > 0 }?.let { "S${index + 1} ${formatTime(it)}" }
+                }.joinToString(" · ")
+                append("LAP ${lap.number}: ${formatTime(lap.durationMs)}  ${if (lap.valid) "delta ${formatDelta(delta)}" else "NON VALIDO"}  · Vmax ${summary.maxKmh} km/h")
+                if (splitText.isNotEmpty()) append("  · $splitText")
+                append("\n")
+            }
             append("\nEVOLUZIONE SESSIONE\n")
             when {
                 phaseDelta <= -300L -> append("La parte finale è più rapida di ${formatTime(-phaseDelta)} rispetto all'inizio: andamento compatibile con maggiore fiducia, pista o gomme in finestra.\n")
@@ -2307,7 +2329,15 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 val record = segmentBests[index]
                 if (record != null) {
                     val averageGap = segmentAverages[index] - record.second
-                    append("$label  best ${formatTime(record.second)} (lap ${record.first.number}) · media ${formatTime(segmentAverages[index])} · margine ${formatDelta(averageGap)}\n")
+                    append("$label  best ${formatTime(record.second)} (lap ${record.first.number}) · media ${formatTime(segmentAverages[index])} · margine ${formatDelta(averageGap)}")
+                    if (bestSectorMargins[index] > 0) append(" · ${bestSectorMargins[index]} giri oltre mezzo secondo dal record")
+                    append("\n")
+                }
+            }
+            if (segmentCount > 0) {
+                append("\nRECORD PARZIALI\n")
+                segmentBests.forEachIndexed { index, record ->
+                    record?.let { append("${segmentLabels[index]}: ${formatTime(it.second)} ottenuto al lap ${it.first.number}; unirlo agli altri record costruisce l'ideal lap.\n") }
                 }
             }
             worstIndex?.let { index ->
@@ -2323,6 +2353,14 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             append("Variabilità minime di frenata: $brakingRange km/h · variabilità uscite: $exitRange km/h\n")
             if (brakingRange > 7 || exitRange > 7) append("Le velocità nei punti chiave variano molto: la ripetibilità di frenata e apertura gas è la prima leva per rendere i giri più costanti.\n")
             else append("Le velocità nei punti chiave sono abbastanza ripetibili: il guadagno principale è nella precisione delle traiettorie e nell'unione dei migliori settori.\n")
+            append("\nINDICAZIONE PER IL PROSSIMO STINT\n")
+            when {
+                worstIndex != null && (segmentAverages[worstIndex] - (segmentBests[worstIndex]?.second ?: segmentAverages[worstIndex])) >= 500L ->
+                    append("Concentrati su ${segmentLabels[worstIndex]}: qui c'è il margine più grande e si ripete in più giri. Lavora prima sul punto di frenata e poi sull'uscita; non inseguire la velocità massima sul rettilineo se la curva precedente peggiora.\n")
+                phaseDelta <= -300L -> append("Il ritmo sta crescendo: mantieni la stessa sequenza e prova a rifinire il settore più lento senza cambiare tutto il giro.\n")
+                brakingRange > 7 -> append("La priorità è rendere più costante la frenata: anticipare o ritardare troppo il punto di staccata sta creando parte della dispersione.\n")
+                else -> append("La base è solida: cerca di combinare i tuoi migliori settori nello stesso giro e punta alla pulizia delle traiettorie.\n")
+            }
             append("\nNOTA METODO\nLe indicazioni derivano da GPS e velocità del telefono: utili per individuare tendenze e priorità, non sostituiscono sensori ruota, IMU o dati telemetrici professionali.\n")
         }
     }
