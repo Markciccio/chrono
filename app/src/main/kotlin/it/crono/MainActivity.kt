@@ -238,16 +238,19 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun actionButton(label: String, action: () -> Unit) = Button(this).apply {
-        text = label
-        textSize = 12f
+        val isClose = label == "CHIUDI"
+        text = if (isClose) "×" else label
+        textSize = if (isClose) 25f else 12f
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         minHeight = dp(44)
         val accent = when (label) {
             "AVVIA" -> Color.rgb(24, 213, 184)
             "RESET" -> Color.rgb(255, 91, 100)
             "SPOSTA TRAGUARDO" -> Color.rgb(174, 119, 255)
+            "CHIUDI" -> Color.rgb(72, 205, 255)
             else -> Color.rgb(255, 185, 64)
         }
+        if (isClose) contentDescription = "Chiudi"
         setTextColor(accent)
         background = hudPanel(Color.rgb(8, 23, 32), accent, 2)
         setOnClickListener { action() }
@@ -343,7 +346,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), dp(8), dp(10), dp(8)) }
         val scroll = ScrollView(this).apply { addView(list) }
-        val dialog = AlertDialog.Builder(this).setTitle("Elenco piste").setView(scroll).setNegativeButton("CHIUDI", null).create()
+        val dialog = AlertDialog.Builder(this).setTitle("Elenco piste").setView(scroll).setNegativeButton("×", null).create()
         tracks.forEach { track ->
             val open = Button(this).apply {
                 text = "${track.name}\n${formatTime(track.lap.durationMs)} · ${track.sectors.size} settori"
@@ -494,7 +497,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }.apply { setTrack(points); postDelayed({ fitEntireTrack() }, 400) }
         val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(12), dp(14), dp(12)); setBackgroundColor(Color.rgb(7, 24, 33)) }
         info.addView(TextView(this).apply { text = track.name.uppercase(Locale.ITALIAN); textSize = 21f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) })
-        info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(6) })
+        info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(42), dp(38)).apply { topMargin = dp(6); gravity = Gravity.END })
         selectedLabel = TextView(this).apply { textSize = 14f; setTextColor(Color.rgb(184, 223, 235)); setPadding(0, dp(14), 0, dp(10)) }
         info.addView(selectedLabel)
         markerButtons = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -1036,6 +1039,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             timing.currentLapNumber,
             lastLapMs,
             bestLap?.durationMs,
+            bestLap?.number,
             running && !paused
         )
         trackMap.setFix(latestFix)
@@ -1173,8 +1177,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     // Do not read the sector time: the useful radio information here is its delta.
                     speak("$sectorCall$deltaPart", flush = true)
                 }
-                // Sector calls always win over predictive-delta calls, including the samples just after it.
-                deltaAnnouncementsSuppressedUntilMs = (latestFix?.timeMs ?: System.currentTimeMillis()) + 3_000L
+                // Sector calls always win over predictive-delta calls for a full five seconds.
+                deltaAnnouncementsSuppressedUntilMs = (latestFix?.timeMs ?: System.currentTimeMillis()) + 5_000L
                 status.text = "Sector ${event.number}: ${formatTime(event.elapsedMs)}${delta?.let { " · ${formatDelta(it)}" } ?: ""}"
             }
             is TimingEvent.LapCompleted -> {
@@ -1273,7 +1277,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
     private fun updateStatus() {
         if (screenLockOverlay != null) {
-            status.text = "🔒 SCHERMO BLOCCATO · scorri verso destra o premi un tasto volume"
+            status.text = "🔒 SCHERMO BLOCCATO · premi un tasto volume per sbloccare"
             return
         }
         val fix = latestFix ?: return
@@ -1340,7 +1344,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private fun finalSectorRecordMessage(segmentMs: Long) = "Fucsia. Tempo migliore ultimo settore. ${spokenTime(segmentMs)}"
 
     private fun saveCurrentSession(): String? {
-        if (simulator != null || sessionSamples.size < 2) return null
+        if (simulator != null || sessionSamples.size < 2 || recordedLaps.none { it.valid }) return null
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val name = "crono_$stamp.gpx"
         return runCatching {
@@ -1381,8 +1385,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         lowSpeedSinceMs = null
         startButton?.text = "AVVIA"
         pauseButton?.text = "PAUSA"
-        status.text = if (saved != null) "Sessione salvata · analisi disponibile" else "Registrazione fermata · nessun dato sufficiente"
-        speak(if (saved != null) "Registrazione fermata. Sessione salvata" else "Registrazione fermata", flush = true)
+        status.text = if (saved != null) "Sessione salvata · analisi disponibile" else "Registrazione fermata · nessun giro valido, sessione non salvata"
+        speak(if (saved != null) "Registrazione fermata. Sessione salvata" else "Registrazione fermata. Nessun giro valido, sessione non salvata", flush = true)
         saved?.let(::resolveSessionLocationName)
         saved?.let(::showSessionAnalysis)
     }
@@ -1390,7 +1394,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private fun saveSessionRecord(simulated: Boolean, gpxName: String?): SavedSession? {
         val first = sessionSamples.firstOrNull() ?: return null
         val last = sessionSamples.lastOrNull() ?: return null
-        if (sessionSamples.size < 2) return null
+        if (sessionSamples.size < 2 || recordedLaps.none { it.valid }) return null
         return sessionStore.save(
             SavedSession(
                 id = "session_${first.timeMs}",
@@ -1442,7 +1446,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val dialog = AlertDialog.Builder(this)
             .setTitle("Storico sessioni")
             .setView(scroll)
-            .setNegativeButton("CHIUDI", null)
+            .setNegativeButton("×", null)
             .create()
         sessions.forEach { session ->
             val validLaps = session.laps.filter { it.valid }
@@ -1495,31 +1499,33 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(180, 194, 205); style = Paint.Style.STROKE; strokeWidth = dp(1).toFloat() }
         private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(55, 72, 82); strokeWidth = dp(1).toFloat() }
         private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = dp(10).toFloat(); typeface = Typeface.DEFAULT_BOLD }
-        private val bestPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 232, 31); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
-        private val lapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(35, 151, 255); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
+        private val bestPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 61, 72); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
+        private val lapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 232, 31); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
 
         override fun onDraw(canvas: Canvas) {
+            val expanded = height > dp(280)
             val inset = dp(5).toFloat()
             canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), dp(5).toFloat(), dp(5).toFloat(), panelPaint)
             canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), dp(5).toFloat(), dp(5).toFloat(), borderPaint)
-            val chartLeft = dp(12).toFloat()
-            val chartRight = width - dp(8).toFloat()
-            val chartTop = dp(29).toFloat()
-            val chartBottom = height - dp(17).toFloat()
+            val chartLeft = dp(if (expanded) 34 else 12).toFloat()
+            val chartRight = width - dp(if (expanded) 28 else 8).toFloat()
+            val chartTop = dp(if (expanded) 82 else 29).toFloat()
+            val chartBottom = height - dp(if (expanded) 55 else 17).toFloat()
             (0..3).forEach { index ->
                 val y = chartTop + (chartBottom - chartTop) * index / 3f
                 canvas.drawLine(chartLeft, y, chartRight, y, gridPaint)
             }
-            canvas.drawText("VELOCITÀ / DISTANZA", inset + dp(5), dp(14).toFloat(), titlePaint)
+            titlePaint.textSize = dp(if (expanded) 20 else 10).toFloat()
+            canvas.drawText("VELOCITÀ / DISTANZA", inset + dp(5), dp(if (expanded) 30 else 14).toFloat(), titlePaint)
             titlePaint.color = bestPaint.color
-            canvas.drawText("— BEST", width - dp(95).toFloat(), dp(14).toFloat(), titlePaint)
+            canvas.drawText("— BEST LAP", width - dp(if (expanded) 220 else 95).toFloat(), dp(if (expanded) 30 else 14).toFloat(), titlePaint)
             titlePaint.color = lapPaint.color
-            canvas.drawText("— GIRO", width - dp(43).toFloat(), dp(14).toFloat(), titlePaint)
+            canvas.drawText("— GIRO ATTUALE", width - dp(if (expanded) 120 else 43).toFloat(), dp(if (expanded) 30 else 14).toFloat(), titlePaint)
             titlePaint.color = Color.WHITE
-            titlePaint.textSize = dp(8).toFloat()
-            canvas.drawText("0", chartLeft, height - dp(5).toFloat(), titlePaint)
+            titlePaint.textSize = dp(if (expanded) 14 else 8).toFloat()
+            canvas.drawText("0%", chartLeft, height - dp(if (expanded) 18 else 5).toFloat(), titlePaint)
             titlePaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("100%", chartRight, height - dp(5).toFloat(), titlePaint)
+            canvas.drawText("100%", chartRight, height - dp(if (expanded) 18 else 5).toFloat(), titlePaint)
             titlePaint.textAlign = Paint.Align.LEFT
             drawProfile(canvas, bestProfile, chartLeft, chartRight, chartTop, chartBottom, bestPaint)
             drawProfile(canvas, lapProfile, chartLeft, chartRight, chartTop, chartBottom, lapPaint)
@@ -1556,6 +1562,26 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
     }
 
+    private fun showSpeedComparison(session: SavedSession, lap: RecordedLap) {
+        val best = session.laps.filter { it.valid }.minByOrNull { it.durationMs }
+        if (best == null || best.samples.size < 3) {
+            AlertDialog.Builder(this).setTitle("Confronto velocità").setMessage("Serve almeno un giro valido di riferimento.").setPositiveButton("OK", null).show()
+            return
+        }
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.rgb(3, 9, 14)) }
+        root.addView(SpeedComparisonView(lap, best), FrameLayout.LayoutParams(-1, -1).apply { setMargins(dp(12), dp(12), dp(12), dp(12)) })
+        root.addView(actionButton("CHIUDI") { dialog.dismiss() }, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.TOP or Gravity.END).apply { topMargin = dp(22); rightMargin = dp(22) })
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.apply {
+            setLayout(-1, -1)
+            setBackgroundDrawable(ColorDrawable(Color.rgb(3, 9, 14)))
+            decorView.systemUiVisibility = window.decorView.systemUiVisibility
+        }
+    }
+
     private fun showLapReview(session: SavedSession, lap: RecordedLap, onSessionUpdated: (SavedSession) -> Unit = {}) {
         if (lap.samples.size < 3) {
             AlertDialog.Builder(this).setTitle("Mappa giro").setMessage("Questo giro non contiene abbastanza punti GPS per la mappa.").setPositiveButton("OK", null).show()
@@ -1581,18 +1607,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             setSpeedMarkers(speedMarkersForLap(lap))
             postDelayed({ fitEntireTrack() }, 500)
         }
-        val referenceLap = session.laps.filter { it.valid }.minByOrNull { it.durationMs }
-        val mapFrame = FrameLayout(this).apply {
-            addView(map, FrameLayout.LayoutParams(-1, -1))
-            referenceLap?.let { best ->
-                addView(
-                    SpeedComparisonView(lap, best),
-                    FrameLayout.LayoutParams(dp(282), dp(142), Gravity.BOTTOM or Gravity.START).apply {
-                        leftMargin = dp(10); bottomMargin = dp(10)
-                    }
-                )
-            }
-        }
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
@@ -1606,11 +1620,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             text = "\nSETTORI RILEVATI\n${sectorText.ifBlank { "Nessun intermedio disponibile" }}"
             textSize = 16f; setTextColor(Color.rgb(184, 223, 235))
         }, LinearLayout.LayoutParams(-1, 0, 1f))
-        info.addView(actionButton("SALVA COME PISTA") {
-            saveLapAsTrack(session, lap, finish, sectors)
-        }, LinearLayout.LayoutParams(-1, dp(44)))
         info.addView(actionButton("ANALISI INGEGNERE") {
             showEngineerAnalysis(session, lap, sectors)
+        }, LinearLayout.LayoutParams(-1, dp(44)))
+        info.addView(actionButton("CONFRONTO VELOCITÀ") {
+            showSpeedComparison(session, lap)
         }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
         info.addView(actionButton(if (lap.valid) "GIRO NON VALIDO" else "RIPRISTINA GIRO") {
             val updated = session.copy(laps = session.laps.map { candidate ->
@@ -1621,8 +1635,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             dialog.dismiss()
             onSessionUpdated(updated)
         }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
-        info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
-        root.addView(mapFrame, LinearLayout.LayoutParams(0, -1, .72f).apply { rightMargin = dp(6) })
+        info.addView(actionButton("SALVA COME PISTA") {
+            saveLapAsTrack(session, lap, finish, sectors)
+        }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
+        info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { topMargin = dp(6); gravity = Gravity.END })
+        root.addView(map, LinearLayout.LayoutParams(0, -1, .72f).apply { rightMargin = dp(6) })
         root.addView(info, LinearLayout.LayoutParams(0, -1, .28f))
         dialog.setContentView(root)
         dialog.show()
@@ -1660,7 +1677,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
         val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(7, 24, 33)) }
         right.addView(ScrollView(this).apply { addView(report) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        right.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(44)).apply { setMargins(dp(12), dp(4), dp(12), dp(12)) })
+        right.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { setMargins(dp(12), dp(4), dp(12), dp(12)); gravity = Gravity.END })
         root.addView(map, LinearLayout.LayoutParams(0, -1, .57f).apply { rightMargin = dp(6) })
         root.addView(right, LinearLayout.LayoutParams(0, -1, .43f))
         dialog.setContentView(root)
@@ -2070,7 +2087,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
         lastLapMs = null
         lastBestReminderLap = 0
-        dashboard.setLiveData(latestFix, null, null, 1, null, null, false)
+        dashboard.setLiveData(latestFix, null, null, 1, null, null, null, false)
         if (!keepTrack) status.text = "Cronometro azzerato"
     }
 
@@ -2233,6 +2250,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         private var lapNumber = 1
         private var last: Long? = null
         private var best: Long? = null
+        private var bestLapNumber: Int? = null
         private val sectorResults = mutableMapOf<Int, SectorDisplay>()
         private var recording = false
         private var minLat = 0.0; private var maxLat = 1.0; private var minLon = 0.0; private var maxLon = 1.0
@@ -2267,9 +2285,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
         fun setLiveData(
             value: GpsSample?, lapElapsed: Long?, valueDelta: Long?, currentLapNumber: Int,
-            lastLap: Long?, bestLap: Long?, isRecording: Boolean
+            lastLap: Long?, bestLap: Long?, bestNumber: Int?, isRecording: Boolean
         ) {
-            fix = value; elapsed = lapElapsed; delta = valueDelta; lapNumber = currentLapNumber; last = lastLap; best = bestLap; recording = isRecording; invalidate()
+            fix = value; elapsed = lapElapsed; delta = valueDelta; lapNumber = currentLapNumber; last = lastLap; best = bestLap; bestLapNumber = bestNumber; recording = isRecording; invalidate()
         }
 
         fun setLiveTimingScale(scale: Float) {
@@ -2382,8 +2400,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawRect(0f, 0f, dp(6).toFloat(), dp(28).toFloat(), accent)
             labelPaint.color = Color.rgb(218, 229, 235); labelPaint.textAlign = Paint.Align.LEFT
             canvas.drawText("PIT ENGINEER  //  LIVE TIMING", pad + dp(8), dp(20).toFloat(), labelPaint)
-            labelPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("GIRO $lapNumber", width - pad, dp(20).toFloat(), labelPaint)
+            labelPaint.textAlign = Paint.Align.RIGHT; labelPaint.textSize = timingTextSize(10)
+            canvas.drawText("LAP", width - pad - dp(34), dp(13).toFloat(), labelPaint)
+            primaryPaint.color = Color.WHITE; primaryPaint.textAlign = Paint.Align.RIGHT; primaryPaint.textSize = timingTextSize(28)
+            canvas.drawText("$lapNumber", width - pad, dp(26).toFloat(), primaryPaint)
             if (recording) {
                 labelPaint.color = Color.rgb(255, 82, 92); labelPaint.textAlign = Paint.Align.CENTER
                 canvas.drawText("● REC", width * .66f, dp(20).toFloat(), labelPaint)
@@ -2392,7 +2412,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val deltaBottom = (dp(98) + largeOffset).toFloat()
             canvas.drawRoundRect(pad, dp(38).toFloat(), width - pad, deltaBottom, dp(4).toFloat(), dp(4).toFloat(), panel)
             canvas.drawRect(pad, dp(38).toFloat(), pad + dp(6), deltaBottom, accent)
-            labelPaint.color = Color.rgb(112, 157, 174); labelPaint.textAlign = Paint.Align.LEFT
+            labelPaint.color = Color.rgb(112, 157, 174); labelPaint.textAlign = Paint.Align.LEFT; labelPaint.textSize = dp(11).toFloat()
             canvas.drawText("DELTA vs BEST LAP", pad + dp(18), (if (largeOffset > 0) dp(55) else dp(58)).toFloat(), labelPaint)
             val liveDelta = delta
             deltaPaint.color = when { liveDelta == null -> Color.LTGRAY; liveDelta < 0 -> green; else -> red }
@@ -2401,7 +2421,13 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             labelPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText("BEST LAP", width - pad - dp(18), (if (largeOffset > 0) dp(55) else dp(58)).toFloat(), labelPaint)
             bestPaint.color = green; bestPaint.textAlign = Paint.Align.RIGHT; bestPaint.textSize = timingTextSize(36)
-            canvas.drawText(best?.let(::formatTime) ?: "--:--.---", width - pad - dp(18), (dp(91) + largeOffset).toFloat(), bestPaint)
+            val bestText = best?.let(::formatTime) ?: "--:--.---"
+            val bestRight = width - pad - dp(18)
+            canvas.drawText(bestText, bestRight, (dp(91) + largeOffset).toFloat(), bestPaint)
+            bestLapNumber?.let { number ->
+                labelPaint.textAlign = Paint.Align.RIGHT; labelPaint.textSize = timingTextSize(10); labelPaint.color = Color.rgb(184, 223, 235)
+                canvas.drawText("LAP $number", bestRight - bestPaint.measureText(bestText) - dp(8), (dp(88) + largeOffset).toFloat(), labelPaint)
+            }
 
             val sectorHeaderTop = (dp(106) + largeOffset).toFloat()
             canvas.drawRect(pad, sectorHeaderTop, width - pad, sectorHeaderTop + dp(22), dark)
