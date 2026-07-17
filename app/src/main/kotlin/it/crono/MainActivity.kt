@@ -411,6 +411,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         lateinit var map: TrackMapView
         lateinit var selectedLabel: TextView
         lateinit var addSectorButton: Button
+        lateinit var removeSectorButton: Button
+        lateinit var markerButtons: LinearLayout
 
         fun orderedIndexes() = sectorIndexes.sortedBy { (it - finishIndex + points.size) % points.size }
         fun markerLine(index: Int): TimingLine {
@@ -429,17 +431,21 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             // obvious even in a tight bend where the line also changes its tangent angle.
             val selectedSample = track.lap.samples[selectedIndex]
             map.setFix(selectedSample)
-            selectedLabel.text = "${selectedText()} · centro rosso · − / + spostano di 20 m lungo la traccia"
+            selectedLabel.text = "${selectedText()} · centro rosso · − / + spostano di 1 m lungo la traccia"
             addSectorButton.text = if (sectorIndexes.size >= 3) "LIMITE: 3 SETTORI" else "AGGIUNGI SETTORE (${sectorIndexes.size}/3)"
             addSectorButton.isEnabled = sectorIndexes.size < 3
+            removeSectorButton.isEnabled = selection >= 0
+            markerButtons.removeAllViews()
+            fun markerButton(label: String, itemSelection: Int) = actionButton(if (selection == itemSelection) "● $label" else label) {
+                selection = itemSelection
+                redraw()
+            }
+            markerButtons.addView(markerButton("TRAGUARDO", -1), LinearLayout.LayoutParams(0, dp(40), 1.35f).apply { rightMargin = dp(3) })
+            sectorIndexes.indices.forEach { index ->
+                markerButtons.addView(markerButton("S${index + 1}", index), LinearLayout.LayoutParams(0, dp(40), 1f).apply { if (index > 0) leftMargin = dp(3) })
+            }
         }
-        fun chooseMarker() {
-            val choices = mutableListOf("TRAGUARDO")
-            sectorIndexes.indices.forEach { choices += "SETTORE ${it + 1}" }
-            AlertDialog.Builder(this).setTitle("Seleziona elemento da spostare")
-                .setItems(choices.toTypedArray()) { _, which -> selection = which - 1; redraw() }.show()
-        }
-        fun shiftAlongTrack(index: Int, direction: Int, targetDistanceM: Double = 20.0): Int {
+        fun shiftAlongTrack(index: Int, direction: Int, targetDistanceM: Double = 1.0): Int {
             var result = index
             var traveled = 0.0
             var guard = 0
@@ -487,17 +493,19 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         info.addView(TextView(this).apply { text = track.name.uppercase(Locale.ITALIAN); textSize = 21f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) })
         selectedLabel = TextView(this).apply { textSize = 14f; setTextColor(Color.rgb(184, 223, 235)); setPadding(0, dp(14), 0, dp(10)) }
         info.addView(selectedLabel)
-        info.addView(actionButton("SELEZIONA") { chooseMarker() }, LinearLayout.LayoutParams(-1, dp(42)))
+        markerButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        info.addView(markerButtons, LinearLayout.LayoutParams(-1, dp(40)))
         val moveRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        moveRow.addView(actionButton("− 20 m") { shiftMarker(-1) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(3) })
-        moveRow.addView(actionButton("+ 20 m") { shiftMarker(1) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(3) })
+        moveRow.addView(actionButton("− 1 m") { shiftMarker(-1) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(3) })
+        moveRow.addView(actionButton("+ 1 m") { shiftMarker(1) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(3) })
         info.addView(moveRow)
         addSectorButton = actionButton("AGGIUNGI SETTORE") { addSector() }
         info.addView(addSectorButton, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(5) })
-        info.addView(actionButton("RIMUOVI SETTORE") {
+        removeSectorButton = actionButton("RIMUOVI") {
             if (selection >= 0) { sectorIndexes.removeAt(selection); selection = -1; redraw() }
             else status.text = "Seleziona un settore da rimuovere"
-        }, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(5) })
+        }
+        info.addView(removeSectorButton, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(5) })
         info.addView(actionButton("SALVA MODIFICHE") {
             val saved = track.copy(finishLine = markerLine(finishIndex), sectors = orderedIndexes().map(::markerLine))
             trackStore.save(saved)
@@ -512,6 +520,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     trackStore.delete(track); if (activeSavedTrack?.id == track.id) useAutomaticFinish(); dialog.dismiss()
                 }.show()
         }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(5) })
+        info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(5) })
         root.addView(map, LinearLayout.LayoutParams(0, -1, .62f).apply { rightMargin = dp(6) })
         root.addView(info, LinearLayout.LayoutParams(0, -1, .38f))
         dialog.setContentView(root)
@@ -1452,7 +1461,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             setSpeedMarkers(speedMarkersForLap(lap))
             postDelayed({ fitEntireTrack() }, 500)
         }
-        val summary = speedSummary(lap)
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
@@ -1463,7 +1471,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             textSize = 24f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
         })
         info.addView(TextView(this).apply {
-            text = "\nV MAX  ${summary.maxKmh} km/h\nV MIN  ${summary.minKmh} km/h\n\nSULLA MAPPA\nF = fine frenata · A = fine accelerazione\n\nFRENATA  ${summary.brakingMinKmh} km/h\nUSCITA CURVA  ${summary.accelerationMaxKmh} km/h"
+            text = "\nF = fine frenata\nA = fine accelerazione\n\nVelocità e intermedi sono indicati direttamente sulla mappa."
             textSize = 16f; setTextColor(Color.rgb(184, 223, 235))
         }, LinearLayout.LayoutParams(-1, 0, 1f))
         info.addView(actionButton("SALVA COME PISTA") {
@@ -1479,8 +1487,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             onSessionUpdated(updated)
         }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
         info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
-        root.addView(map, LinearLayout.LayoutParams(0, -1, .58f).apply { rightMargin = dp(6) })
-        root.addView(info, LinearLayout.LayoutParams(0, -1, .42f))
+        root.addView(map, LinearLayout.LayoutParams(0, -1, .72f).apply { rightMargin = dp(6) })
+        root.addView(info, LinearLayout.LayoutParams(0, -1, .28f))
         dialog.setContentView(root)
         dialog.show()
         dialog.window?.apply {
