@@ -385,6 +385,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val root = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(8), dp(8), dp(8), dp(8)); setBackgroundColor(Color.rgb(3, 9, 14)) }
         lateinit var map: TrackMapView
         lateinit var selectedLabel: TextView
+        lateinit var addSectorButton: Button
 
         fun orderedIndexes() = sectorIndexes.sortedBy { (it - finishIndex + points.size) % points.size }
         fun markerLine(index: Int): TimingLine {
@@ -404,6 +405,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val selectedSample = track.lap.samples[selectedIndex]
             map.setFix(selectedSample)
             selectedLabel.text = "${selectedText()} · centro rosso · − / + spostano di 20 m lungo la traccia"
+            addSectorButton.text = if (sectorIndexes.size >= 3) "LIMITE: 3 SETTORI" else "AGGIUNGI SETTORE (${sectorIndexes.size}/3)"
+            addSectorButton.isEnabled = sectorIndexes.size < 3
         }
         fun chooseMarker() {
             val choices = mutableListOf("TRAGUARDO")
@@ -428,6 +431,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             redraw()
         }
         fun addSector() {
+            if (sectorIndexes.size >= 3) {
+                status.text = "Una pista può avere al massimo 3 settori"
+                return
+            }
             val markers = (sectorIndexes + finishIndex).sorted()
             if (markers.size == 1) {
                 sectorIndexes += (finishIndex + points.size / 2) % points.size
@@ -460,7 +467,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         moveRow.addView(actionButton("− 20 m") { shiftMarker(-1) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(3) })
         moveRow.addView(actionButton("+ 20 m") { shiftMarker(1) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(3) })
         info.addView(moveRow)
-        info.addView(actionButton("AGGIUNGI SETTORE") { addSector() }, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(5) })
+        addSectorButton = actionButton("AGGIUNGI SETTORE") { addSector() }
+        info.addView(addSectorButton, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(5) })
         info.addView(actionButton("RIMUOVI SETTORE") {
             if (selection >= 0) { sectorIndexes.removeAt(selection); selection = -1; redraw() }
             else status.text = "Seleziona un settore da rimuovere"
@@ -1582,12 +1590,17 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         private val onSessionUpdated: (SavedSession) -> Unit
     ) : View(this@MainActivity) {
         private val validLaps = session.laps.filter { it.valid }
+        private val sectorCount = maxOf(session.sectorLines.size, validLaps.maxOfOrNull { it.sectorElapsedMs.size } ?: 0).coerceIn(0, 3)
         private val best = validLaps.minOfOrNull { it.durationMs }
         private val average = validLaps.takeIf { it.isNotEmpty() }?.map { it.durationMs }?.average()?.toLong()
-        private val ideal = if (validLaps.isNotEmpty() && validLaps.all { it.sectorElapsedMs.size >= 2 }) {
-            validLaps.minOf { it.sectorElapsedMs[0] } +
-                validLaps.minOf { it.sectorElapsedMs[1] - it.sectorElapsedMs[0] } +
-                validLaps.minOf { it.durationMs - it.sectorElapsedMs[1] }
+        private val ideal = if (sectorCount > 0 && validLaps.isNotEmpty() && validLaps.all { it.sectorElapsedMs.size >= sectorCount }) {
+            (0..sectorCount).sumOf { segment ->
+                validLaps.minOf { lap ->
+                    val start = if (segment == 0) 0L else lap.sectorElapsedMs[segment - 1]
+                    val end = if (segment == sectorCount) lap.durationMs else lap.sectorElapsedMs[segment]
+                    end - start
+                }
+            }
         } else null
         private val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = dp(18).toFloat(); typeface = Typeface.DEFAULT_BOLD }
         private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(150, 190, 204); textSize = dp(10).toFloat(); typeface = Typeface.DEFAULT_BOLD }
@@ -1625,8 +1638,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val tableTop = dp(107).toFloat()
             val headerBottom = tableTop + dp(25)
             canvas.drawRect(0f, tableTop, width.toFloat(), headerBottom, Paint().apply { color = Color.rgb(9, 39, 51) })
-            val columns = floatArrayOf(width * .05f, width * .16f, width * .29f, width * .43f, width * .57f, width * .73f, width * .87f)
-            listOf("LAP", "TEMPO", "DELTA", "S1", "S2", "V MAX", "V MIN").forEachIndexed { index, label -> canvas.drawText(label, columns[index], tableTop + dp(17), smallPaint.apply { textAlign = Paint.Align.CENTER }) }
+            val headers = listOf("LAP", "TEMPO", "DELTA") + (1..sectorCount).map { "S$it" } + listOf("V MAX", "V MIN")
+            val columns = FloatArray(headers.size) { index -> width * (index + .5f) / headers.size }
+            headers.forEachIndexed { index, label -> canvas.drawText(label, columns[index], tableTop + dp(17), smallPaint.apply { textAlign = Paint.Align.CENTER }) }
             val dataTop = headerBottom + dp(4)
             val rowHeight = dp(24).toFloat()
             tableDataTop = dataTop
@@ -1651,12 +1665,13 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 rowPaint.color = if (lap.valid) rowColor else Color.rgb(122, 143, 151)
                 canvas.drawText(if (lap.valid) formatDelta(delta) else "NON VALIDO", columns[2], y, rowPaint)
                 rowPaint.color = Color.rgb(255, 205, 90)
-                canvas.drawText(lap.sectorElapsedMs.getOrNull(0)?.let(::formatTime) ?: "—", columns[3], y, rowPaint)
-                canvas.drawText(lap.sectorElapsedMs.getOrNull(1)?.let(::formatTime) ?: "—", columns[4], y, rowPaint)
+                repeat(sectorCount) { sector ->
+                    canvas.drawText(lap.sectorElapsedMs.getOrNull(sector)?.let(::formatTime) ?: "—", columns[3 + sector], y, rowPaint)
+                }
                 rowPaint.color = Color.rgb(255, 112, 112)
-                canvas.drawText(lap.samples.maxOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[5], y, rowPaint)
+                canvas.drawText(lap.samples.maxOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[3 + sectorCount], y, rowPaint)
                 rowPaint.color = Color.rgb(72, 205, 255)
-                canvas.drawText(lap.samples.minOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[6], y, rowPaint)
+                canvas.drawText(lap.samples.minOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[4 + sectorCount], y, rowPaint)
             }
             if (session.laps.isEmpty()) {
                 rowPaint.color = Color.LTGRAY
