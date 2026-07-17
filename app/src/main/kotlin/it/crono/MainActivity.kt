@@ -1771,7 +1771,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         private val analysisSectors = geometryLap?.let { geometryForSession(session, it).sectors }.orEmpty().take(3)
         private val sectorCount = maxOf(analysisSectors.size, validLaps.maxOfOrNull { it.sectorElapsedMs.size } ?: 0).coerceIn(0, 3)
         private val best = validLaps.minOfOrNull { it.durationMs }
-        private val average = validLaps.takeIf { it.isNotEmpty() }?.map { it.durationMs }?.average()?.toLong()
         private fun sectorTimes(lap: RecordedLap): List<Long?> = if (analysisSectors.isNotEmpty()) {
             analysisSectors.map { line -> elapsedAtLine(lap.samples, line) }
         } else lap.sectorElapsedMs.map { it }
@@ -1823,10 +1822,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             headerPaint.color = Color.WHITE
 
             val cardTop = dp(50).toFloat(); val cardBottom = dp(91).toFloat()
-            val cardWidth = (width - dp(24)) / 3f
+            val cardWidth = (width - dp(28)) / 2f
             drawMetric(canvas, pad, cardTop, cardWidth, cardBottom, "BEST LAP", best?.let(::formatTime) ?: "--:--.---", Color.rgb(24, 213, 184))
-            drawMetric(canvas, pad + cardWidth + dp(3), cardTop, cardWidth, cardBottom, "MEDIA", average?.let(::formatTime) ?: "--:--.---", Color.rgb(255, 185, 64))
-            drawMetric(canvas, pad + (cardWidth + dp(3)) * 2, cardTop, cardWidth, cardBottom, "IDEAL", ideal?.let(::formatTime) ?: "--:--.---", Color.rgb(174, 119, 255))
+            drawMetric(canvas, pad + cardWidth + dp(4), cardTop, cardWidth, cardBottom, "IDEAL", ideal?.let(::formatTime) ?: "--:--.---", Color.rgb(174, 119, 255))
 
             // Speed belongs to the lap that produced it, not to a session-wide summary.
             val tableTop = dp(107).toFloat()
