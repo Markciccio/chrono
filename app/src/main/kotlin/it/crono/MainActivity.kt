@@ -73,7 +73,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var lowSpeedSinceMs: Long? = null
     private var screenLockOverlay: View? = null
     private var activeSavedTrack: SavedTrack? = null
-    private var lastSuggestedTrackIds = emptySet<String>()
     private val timing = TimingEngine()
     private var bestLap: Lap? = null
     private var predictor: PredictiveDelta? = null
@@ -899,21 +898,34 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
     private fun toggleSession() {
         if (!running) {
-            resetSession(keepTrack = true)
-            running = true
-            paused = false
-            pauseButton?.text = "PAUSA"
-            startButton?.text = "FERMA"
-            startGps()
-            if (timing.line == null) {
-                status.text = "Registrazione attiva · primo giro in apprendimento"
-                speak("Registrazione avviata. Primo giro in apprendimento", flush = true)
+            // Ask only at the moment AVVIA is pressed. A nearby saved profile is useful,
+            // but the driver must always be able to record a new circuit/variant from scratch.
+            val nearby = latestFix?.let { trackStore.nearby(TrackPoint(it.lat, it.lon)) }.orEmpty()
+            if (nearby.isNotEmpty()) {
+                showNearbyTrackStartChoice(nearby)
             } else {
-                status.text = "Registrazione attiva · attraversa il traguardo per armare il giro"
-                speak("Registrazione avviata. Attraversa il traguardo per armare il giro", flush = true)
+                startSession(activeSavedTrack)
             }
         } else {
             finishAndAnalyzeSession()
+        }
+        dashboard.invalidate()
+    }
+
+    private fun startSession(track: SavedTrack?) {
+        activeSavedTrack = track
+        resetSession(keepTrack = track != null)
+        running = true
+        paused = false
+        pauseButton?.text = "PAUSA"
+        startButton?.text = "FERMA"
+        startGps()
+        if (timing.line == null) {
+            status.text = "Registrazione attiva · primo giro in apprendimento"
+            speak("Registrazione avviata. Primo giro in apprendimento", flush = true)
+        } else {
+            status.text = "${track?.name ?: "Pista"} caricata · attraversa il traguardo per armare il giro"
+            speak("Registrazione avviata. Attraversa il traguardo per armare il giro", flush = true)
         }
         dashboard.invalidate()
     }
@@ -986,7 +998,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private fun processSample(sample: GpsSample) {
         previousFix = latestFix
         latestFix = sample
-        if (!running) offerNearbySavedTracks(sample)
         if (running && !paused) {
             liveRoute += TrackPoint(sample.lat, sample.lon)
             sessionSamples += sample
@@ -1032,22 +1043,42 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         trackMap.setFix(latestFix)
     }
 
-    private fun offerNearbySavedTracks(sample: GpsSample) {
-        val nearby = trackStore.nearby(TrackPoint(sample.lat, sample.lon))
-        val ids = nearby.map { it.id }.toSet()
-        if (ids.isEmpty()) {
-            lastSuggestedTrackIds = emptySet()
-            return
+    /** Explicit, high-contrast chooser used before starting: native setItems can be unreadable
+     * in the HUD theme on some Pixel builds. */
+    private fun showNearbyTrackStartChoice(nearby: List<SavedTrack>) {
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(4), dp(8), dp(4))
         }
-        if (ids == lastSuggestedTrackIds) return
-        lastSuggestedTrackIds = ids
-        val labels = nearby.map { "${it.name} · ${formatTime(it.lap.durationMs)}" }.toTypedArray()
-        AlertDialog.Builder(this)
+        val scroll = ScrollView(this).apply { addView(list) }
+        lateinit var dialog: AlertDialog
+        nearby.forEach { track ->
+            val use = Button(this).apply {
+                text = "USA ${track.name.uppercase(Locale.ITALIAN)}\n${formatTime(track.lap.durationMs)} · ${track.sectors.size} SETTORI"
+                textSize = 14f
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), 0, dp(10), 0)
+                setTextColor(Color.WHITE)
+                background = hudPanel(Color.rgb(7, 31, 42), Color.rgb(28, 190, 222), 2)
+                setOnClickListener { dialog.dismiss(); startSession(track) }
+            }
+            list.addView(use, LinearLayout.LayoutParams(-1, dp(62)).apply { topMargin = dp(4) })
+        }
+        val fromScratch = Button(this).apply {
+            text = "REGISTRA DA ZERO"
+            textSize = 13f
+            setTextColor(Color.rgb(255, 185, 64))
+            background = hudPanel(Color.rgb(33, 26, 13), Color.rgb(255, 185, 64), 1)
+            setOnClickListener { dialog.dismiss(); startSession(null) }
+        }
+        list.addView(fromScratch, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
+        dialog = AlertDialog.Builder(this)
             .setTitle("Piste nelle vicinanze")
-            .setMessage("Scegli una pista salvata per caricare traguardo e settori.")
-            .setItems(labels) { _, which -> activateSavedTrack(nearby[which]) }
-            .setNegativeButton("NON ORA", null)
-            .show()
+            .setMessage("Scegli una pista come base per traguardo e settori, oppure registra una nuova variante.")
+            .setView(scroll)
+            .setNegativeButton("ANNULLA", null)
+            .create()
+        dialog.show()
     }
 
     private fun activateSavedTrack(track: SavedTrack) {
