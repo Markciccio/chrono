@@ -1410,8 +1410,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             AlertDialog.Builder(this).setTitle("Mappa giro").setMessage("Questo giro non contiene abbastanza punti GPS per la mappa.").setPositiveButton("OK", null).show()
             return
         }
-        val finish = session.timingLine ?: lineFromLap(lap)
-        val sectors = session.sectorLines.ifEmpty { deriveSectors(lap.samples).map { it.line } }
+        val geometry = geometryForSession(session, lap)
+        val finish = geometry.finish
+        val sectors = geometry.sectors
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val root = LinearLayout(this).apply {
@@ -1533,6 +1534,27 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         return Geo.timingLine(TrackPoint(samples.first().lat, samples.first().lon), heading)
     }
 
+    private data class SessionGeometry(val finish: TimingLine, val sectors: List<TimingLine>, val fromSavedTrack: Boolean)
+
+    /** Prefer the edited circuit profile over historical marker coordinates in a session.
+     * A name match is preferred; otherwise only a very-close profile is accepted, so nearby
+     * circuit variants cannot silently replace the geometry. */
+    private fun geometryForSession(session: SavedSession, fallbackLap: RecordedLap): SessionGeometry {
+        val firstSample = session.samples.firstOrNull() ?: session.laps.firstOrNull()?.samples?.firstOrNull()
+        val locality = session.displayName.substringBefore(" · ").trim()
+        val candidates = firstSample?.let { sample -> trackStore.nearby(TrackPoint(sample.lat, sample.lon), radiusM = 500.0) }.orEmpty()
+        val saved = candidates.firstOrNull { it.name.equals(locality, ignoreCase = true) }
+            ?: candidates.minByOrNull { track ->
+                Geo.distanceM(firstSample!!.lat, firstSample.lon, track.center.lat, track.center.lon)
+            }
+        if (saved != null) return SessionGeometry(saved.finishLine, saved.sectors, fromSavedTrack = true)
+        return SessionGeometry(
+            session.timingLine ?: lineFromLap(fallbackLap),
+            session.sectorLines.ifEmpty { deriveSectors(fallbackLap.samples).map { it.line } },
+            fromSavedTrack = false
+        )
+    }
+
     private fun saveLapAsTrack(session: SavedSession, lap: RecordedLap, finish: TimingLine, sectors: List<TimingLine>) {
         if (!lap.valid) {
             status.text = "Un giro non valido non può diventare una pista"
@@ -1549,8 +1571,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val allSamples = session.samples.ifEmpty { session.laps.flatMap { it.samples } }
         val fallbackLap = session.laps.filter { it.valid }.minByOrNull { it.durationMs }
-        val finish = session.timingLine ?: fallbackLap?.let(::lineFromLap)
-        val sectors = session.sectorLines.ifEmpty { fallbackLap?.let { deriveSectors(it.samples).map { sector -> sector.line } } ?: emptyList() }
+        val geometry = fallbackLap?.let { geometryForSession(session, it) }
+        val finish = geometry?.finish
+        val sectors = geometry?.sectors.orEmpty()
         val map = TrackMapView(this, ::handleTrackTap).apply {
             setTrack(allSamples.map { TrackPoint(it.lat, it.lon) })
             setTimingLine(finish)
@@ -1593,14 +1616,23 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         private val sectorCount = maxOf(session.sectorLines.size, validLaps.maxOfOrNull { it.sectorElapsedMs.size } ?: 0).coerceIn(0, 3)
         private val best = validLaps.minOfOrNull { it.durationMs }
         private val average = validLaps.takeIf { it.isNotEmpty() }?.map { it.durationMs }?.average()?.toLong()
-        private val ideal = if (sectorCount > 0 && validLaps.isNotEmpty() && validLaps.all { it.sectorElapsedMs.size >= sectorCount }) {
-            (0..sectorCount).sumOf { segment ->
-                validLaps.minOf { lap ->
-                    val start = if (segment == 0) 0L else lap.sectorElapsedMs[segment - 1]
-                    val end = if (segment == sectorCount) lap.durationMs else lap.sectorElapsedMs[segment]
-                    end - start
-                }
+        /** The ideal lap is the sum of the best independently recorded segments.  A partial
+         * lap must not hide it: only the segment that lacks a reading is ignored. */
+        private val ideal = if (sectorCount > 0) {
+            val segments = (0..sectorCount).mapNotNull { segment ->
+                validLaps.mapNotNull { lap ->
+                    when {
+                        segment < sectorCount && lap.sectorElapsedMs.size > segment -> {
+                            val start = if (segment == 0) 0L else lap.sectorElapsedMs[segment - 1]
+                            lap.sectorElapsedMs[segment] - start
+                        }
+                        segment == sectorCount && lap.sectorElapsedMs.size >= sectorCount ->
+                            lap.durationMs - lap.sectorElapsedMs[segment - 1]
+                        else -> null
+                    }
+                }.minOrNull()
             }
+            segments.takeIf { it.size == sectorCount + 1 }?.sum()
         } else null
         private val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = dp(18).toFloat(); typeface = Typeface.DEFAULT_BOLD }
         private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(150, 190, 204); textSize = dp(10).toFloat(); typeface = Typeface.DEFAULT_BOLD }
@@ -1628,11 +1660,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             headerPaint.color = Color.WHITE
 
             val cardTop = dp(50).toFloat(); val cardBottom = dp(91).toFloat()
-            val cardWidth = (width - dp(32)) / 4f
+            val cardWidth = (width - dp(24)) / 3f
             drawMetric(canvas, pad, cardTop, cardWidth, cardBottom, "BEST LAP", best?.let(::formatTime) ?: "--:--.---", Color.rgb(24, 213, 184))
-            drawMetric(canvas, pad + cardWidth + dp(3), cardTop, cardWidth, cardBottom, "LAST LAP", validLaps.lastOrNull()?.durationMs?.let(::formatTime) ?: "--:--.---", Color.rgb(72, 205, 255))
-            drawMetric(canvas, pad + (cardWidth + dp(3)) * 2, cardTop, cardWidth, cardBottom, "MEDIA", average?.let(::formatTime) ?: "--:--.---", Color.rgb(255, 185, 64))
-            drawMetric(canvas, pad + (cardWidth + dp(3)) * 3, cardTop, cardWidth, cardBottom, "IDEAL", ideal?.let(::formatTime) ?: "--:--.---", Color.rgb(174, 119, 255))
+            drawMetric(canvas, pad + cardWidth + dp(3), cardTop, cardWidth, cardBottom, "MEDIA", average?.let(::formatTime) ?: "--:--.---", Color.rgb(255, 185, 64))
+            drawMetric(canvas, pad + (cardWidth + dp(3)) * 2, cardTop, cardWidth, cardBottom, "IDEAL", ideal?.let(::formatTime) ?: "--:--.---", Color.rgb(174, 119, 255))
 
             // Speed belongs to the lap that produced it, not to a session-wide summary.
             val tableTop = dp(107).toFloat()
