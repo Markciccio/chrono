@@ -1272,7 +1272,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         // Il delta Ã¨ utile solo quando cambia davvero: nessun messaggio ripetuto sullo stesso valore.
         val elapsedSinceMessage = if (lastDeltaAnnouncementElapsedMs == Long.MIN_VALUE) Long.MAX_VALUE else elapsed - lastDeltaAnnouncementElapsedMs
         val improvementCooldownPassed = elapsedSinceMessage >= voiceAlertIntervalMs
-        val lossCooldownPassed = elapsedSinceMessage >= voiceAlertIntervalMs * 2
+        // La frequenza scelta nel menu vale per ogni tipo di delta, anche per i peggioramenti.
+        val lossCooldownPassed = elapsedSinceMessage >= voiceAlertIntervalMs
         // Un centesimo Ã¨ giÃ  un progresso utile; il filtro evita solo le oscillazioni identiche.
         val improvingDelta = improvementCooldownPassed && (
             (lastReported == null && current <= -10) ||
