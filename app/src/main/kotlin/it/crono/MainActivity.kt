@@ -1250,7 +1250,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                             lastBestReminderLap = event.lap.number
                         }
                     }
-                    if (isFinalSegmentRecord) append(" ${finalSectorRecordMessage(finalSegmentMs)}.")
+                    if (isFinalSegmentRecord) append(" ${finalSectorRecordMessage()}.")
                 }
                 speak(message, flush = true, silenceAfterMs = 5_000L)
                 val sectorNotice = if (defaultSectorsAdded) " · S1 e S2 automatici pronti" else ""
@@ -1372,13 +1372,13 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
     }
 
-    private fun sectorRecordMessage(number: Int, segmentMs: Long) = when (number) {
-        1 -> "Tempo migliore settore uno. ${spokenTime(segmentMs)}"
-        2 -> "Tempo migliore nel tratto tra settore uno e due. ${spokenTime(segmentMs)}"
-        else -> "Tempo migliore del settore $number. ${spokenTime(segmentMs)}"
+    private fun sectorRecordMessage(number: Int) = when (number) {
+        1 -> "Fucsia. Settore uno"
+        2 -> "Fucsia. Settore centrale"
+        else -> "Fucsia. Settore $number"
     }
 
-    private fun finalSectorRecordMessage(segmentMs: Long) = "Fucsia. Tempo migliore ultimo settore. ${spokenTime(segmentMs)}"
+    private fun finalSectorRecordMessage() = "Fucsia. Record ultimo tratto"
 
     private fun saveCurrentSession(): String? {
         if (simulator != null || sessionSamples.size < 2 || recordedLaps.none { it.valid }) return null
