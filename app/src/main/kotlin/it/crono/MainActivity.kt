@@ -27,6 +27,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -69,6 +70,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private lateinit var trackMap: TrackMapView
     private lateinit var status: TextView
     private var tts: TextToSpeech? = null
+    /** Utterances after which predictive delta calls must stay quiet. */
+    private val speechSilenceAfter = mutableSetOf<String>()
 
     private var route = emptyList<TrackPoint>()
     private var latestFix: GpsSample? = null
@@ -141,6 +144,19 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         trackStore = TrackStore(this)
         preferredVoiceName = preferences.getString("engineerVoice", null)
         tts = TextToSpeech(this, this)
+        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) = Unit
+            override fun onError(utteranceId: String?) {
+                if (utteranceId != null) speechSilenceAfter.remove(utteranceId)
+            }
+            override fun onDone(utteranceId: String?) {
+                if (utteranceId != null && speechSilenceAfter.remove(utteranceId)) {
+                    // The five seconds begin after TTS has actually finished speaking,
+                    // not at the instant the finish/sector line is crossed.
+                    deltaAnnouncementsSuppressedUntilMs = System.currentTimeMillis() + 5_000L
+                }
+            }
+        })
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1180,10 +1196,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                         ", ${spokenSectorDelta(it)}"
                     } ?: ""
                     // Do not read the sector time: the useful radio information here is its delta.
-                    speak("$sectorCall$deltaPart", flush = true)
+                    speak("$sectorCall$deltaPart", flush = true, silenceAfterMs = 5_000L)
                 }
-                // Sector calls always win over predictive-delta calls for a full five seconds.
-                deltaAnnouncementsSuppressedUntilMs = (latestFix?.timeMs ?: System.currentTimeMillis()) + 5_000L
                 status.text = "Sector ${event.number}: ${formatTime(event.elapsedMs)}${delta?.let { " · ${formatDelta(it)}" } ?: ""}"
             }
             is TimingEvent.LapCompleted -> {
@@ -1230,7 +1244,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     }
                     if (isFinalSegmentRecord) append(" ${finalSectorRecordMessage(finalSegmentMs)}.")
                 }
-                speak(message, flush = true)
+                speak(message, flush = true, silenceAfterMs = 5_000L)
                 val sectorNotice = if (defaultSectorsAdded) " · S1 e S2 automatici pronti" else ""
                 status.text = if (isBest) "Giro ${event.lap.number}: miglior giro ${formatTime(event.lap.durationMs)}$sectorNotice" else "Giro ${event.lap.number}: ${formatTime(event.lap.durationMs)}$sectorNotice"
                 predictor?.reset()
@@ -1238,8 +1252,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
                 lastAnnouncedDeltaMs = null
                 previousLiveDeltaMs = null
-                // Do not let a new-lap delta interrupt or follow the lap result immediately.
-                deltaAnnouncementsSuppressedUntilMs = (latestFix?.timeMs ?: System.currentTimeMillis()) + 5_000L
+                // The five-second suppression is armed by the TTS completion callback,
+                // so it starts after the complete lap message has been spoken.
             }
         }
     }
@@ -2561,9 +2575,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         if (!keepTrack) status.text = "Cronometro azzerato"
     }
 
-    private fun speak(text: String, flush: Boolean) {
+    private fun speak(text: String, flush: Boolean, silenceAfterMs: Long = 0L) {
         if (!voiceEnabled) return
-        tts?.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "crono-${System.nanoTime()}")
+        val utteranceId = "crono-${System.nanoTime()}"
+        if (silenceAfterMs > 0L) speechSilenceAfter += utteranceId
+        tts?.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, utteranceId)
     }
 
     private fun formatTime(ms: Long) = "%d:%02d.%03d".format(Locale.US, ms / 60_000, (ms / 1_000) % 60, ms % 1_000)
