@@ -25,11 +25,12 @@ class TrackStore(context: Context) {
     private val directory = File(context.filesDir, "tracks").apply { mkdirs() }
 
     fun save(track: SavedTrack) {
+        val normalized = track.copy(sectors = track.sectors.take(2))
         val json = JSONObject().apply {
-            put("id", track.id); put("name", track.name); put("createdAtMs", track.createdAtMs)
-            put("finishLine", lineJson(track.finishLine))
-            put("sectors", JSONArray().apply { track.sectors.forEach { put(lineJson(it)) } })
-            put("lap", lapJson(track.lap))
+            put("id", normalized.id); put("name", normalized.name); put("createdAtMs", normalized.createdAtMs)
+            put("finishLine", lineJson(normalized.finishLine))
+            put("sectors", JSONArray().apply { normalized.sectors.forEach { put(lineJson(it)) } })
+            put("lap", lapJson(normalized.lap))
         }
         File(directory, "${track.id}.json").writeText(json.toString())
     }
@@ -51,7 +52,7 @@ class TrackStore(context: Context) {
         return SavedTrack(
             json.getString("id"), json.getString("name"), json.getLong("createdAtMs"), lap,
             parseLine(json.getJSONObject("finishLine")),
-            json.getJSONArray("sectors").let { array -> (0 until array.length()).map { parseLine(array.getJSONObject(it)) } }
+            json.getJSONArray("sectors").let { array -> (0 until array.length()).map { parseLine(array.getJSONObject(it)) }.take(2) }
         )
     }
 

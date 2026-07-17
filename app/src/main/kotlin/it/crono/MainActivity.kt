@@ -57,6 +57,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         PORTRAIT("Verticale", ActivityInfo.SCREEN_ORIENTATION_PORTRAIT),
         AUTO("Automatica", ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED)
     }
+    private data class SectorDisplay(val elapsedMs: Long, val deltaMs: Long?)
 
     private lateinit var locationManager: LocationManager
     private lateinit var dashboard: RaceView
@@ -394,7 +395,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val points = track.lap.samples.map { TrackPoint(it.lat, it.lon) }
         if (points.size < 3) return
         var finishIndex = Geo.nearestRouteIndex(lineCenter(track.finishLine), points)
-        val sectorIndexes = track.sectors.map { Geo.nearestRouteIndex(lineCenter(it), points) }.toMutableList()
+        val sectorIndexes = track.sectors.take(2).map { Geo.nearestRouteIndex(lineCenter(it), points) }.toMutableList()
         var selection = -1 // -1 finish; otherwise index in sectorIndexes
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -423,8 +424,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val selectedSample = track.lap.samples[selectedIndex]
             map.setFix(selectedSample)
             selectedLabel.text = "${selectedText()} · centro rosso · − / + spostano di 1 m lungo la traccia"
-            addSectorButton.text = if (sectorIndexes.size >= 3) "LIMITE: 3 SETTORI" else "AGGIUNGI SETTORE (${sectorIndexes.size}/3)"
-            addSectorButton.isEnabled = sectorIndexes.size < 3
+            addSectorButton.text = if (sectorIndexes.size >= 2) "LIMITE: 2 SETTORI" else "AGGIUNGI SETTORE (${sectorIndexes.size}/2)"
+            addSectorButton.isEnabled = sectorIndexes.size < 2
             removeSectorButton.isEnabled = selection >= 0
             markerButtons.removeAllViews()
             fun markerButton(label: String, itemSelection: Int, accent: Int) = Button(this@MainActivity).apply {
@@ -464,8 +465,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             redraw()
         }
         fun addSector() {
-            if (sectorIndexes.size >= 3) {
-                status.text = "Una pista può avere al massimo 3 settori"
+            if (sectorIndexes.size >= 2) {
+                status.text = "Una pista può avere al massimo 2 settori"
                 return
             }
             val markers = (sectorIndexes + finishIndex).sorted()
@@ -789,19 +790,26 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             status.text = "Attendo un fix GPS"
             return
         }
-        val choices = mutableListOf("Aggiungi intermedio qui")
+        val canAdd = sectorReferences.size < 2
+        val choices = mutableListOf<String>()
+        if (canAdd) choices += "Aggiungi intermedio qui"
         sectorReferences.forEach { reference -> choices += "Sposta S${reference.number} qui" }
         AlertDialog.Builder(this)
             .setTitle("Intermedi · posizione GPS attuale")
             .setItems(choices.toTypedArray()) { _, which ->
                 val point = TrackPoint(fix.lat, fix.lon)
-                if (which == 0) addSector(point) else moveSector(sectorReferences[which - 1].number, point)
+                if (canAdd && which == 0) addSector(point)
+                else moveSector(sectorReferences[which - if (canAdd) 1 else 0].number, point)
             }
             .show()
     }
 
     /** Adds a sector at the current position; it is safe to call while a lap is running. */
     private fun addSector(center: TrackPoint) {
+        if (sectorReferences.size >= 2) {
+            status.text = "Limite raggiunto: massimo 2 settori"
+            return
+        }
         val snappedCenter = snapToDrivenTrack(center)
         val line = Geo.timingLine(snappedCenter, headingFromDrivenTrack(snappedCenter))
         val referenceElapsed = bestLap?.let { elapsedAtLine(it.samples, line) }
@@ -1084,8 +1092,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         bestLap = referenceLap
         predictor = PredictiveDelta(referenceLap.samples)
         timing.line = track.finishLine
-        timing.sectors = track.sectors
-        sectorReferences = track.sectors.mapIndexed { index, line ->
+        timing.sectors = track.sectors.take(2)
+        sectorReferences = timing.sectors.mapIndexed { index, line ->
             SectorReference(index + 1, line, elapsedAtLine(referenceLap.samples, line) ?: 0L)
         }
         seedBestSectorSegments(referenceLap)
@@ -1395,7 +1403,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 maxSpeedMps = sessionSamples.maxOfOrNull { it.speedMps },
                 minSpeedMps = sessionSamples.minOfOrNull { it.speedMps },
                 timingLine = timing.line,
-                sectorLines = timing.sectors,
+                sectorLines = timing.sectors.take(2),
                 samples = sessionSamples.toList()
             )
         )
@@ -1728,10 +1736,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             ?: candidates.minByOrNull { track ->
                 Geo.distanceM(firstSample!!.lat, firstSample.lon, track.center.lat, track.center.lon)
             }
-        if (saved != null) return SessionGeometry(saved.finishLine, saved.sectors, fromSavedTrack = true)
+        if (saved != null) return SessionGeometry(saved.finishLine, saved.sectors.take(2), fromSavedTrack = true)
         return SessionGeometry(
             session.timingLine ?: lineFromLap(fallbackLap),
-            session.sectorLines.ifEmpty { deriveSectors(fallbackLap.samples).map { it.line } },
+            session.sectorLines.take(2).ifEmpty { deriveSectors(fallbackLap.samples).map { it.line } },
             fromSavedTrack = false
         )
     }
@@ -1795,8 +1803,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     ) : View(this@MainActivity) {
         private val validLaps = session.laps.filter { it.valid }
         private val geometryLap = validLaps.firstOrNull() ?: session.laps.firstOrNull()
-        private val analysisSectors = geometryLap?.let { geometryForSession(session, it).sectors }.orEmpty().take(3)
-        private val sectorCount = maxOf(analysisSectors.size, validLaps.maxOfOrNull { it.sectorElapsedMs.size } ?: 0).coerceIn(0, 3)
+        private val analysisSectors = geometryLap?.let { geometryForSession(session, it).sectors }.orEmpty().take(2)
+        private val sectorCount = maxOf(analysisSectors.size, validLaps.maxOfOrNull { it.sectorElapsedMs.size } ?: 0).coerceIn(0, 2)
         private val best = validLaps.minOfOrNull { it.durationMs }
         private fun sectorTimes(lap: RecordedLap): List<Long?> = if (analysisSectors.isNotEmpty()) {
             analysisSectors.map { line -> elapsedAtLine(lap.samples, line) }
@@ -2142,7 +2150,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         private var lapNumber = 1
         private var last: Long? = null
         private var best: Long? = null
-        private val sectorTexts = mutableMapOf<Int, String>()
+        private val sectorResults = mutableMapOf<Int, SectorDisplay>()
         private var recording = false
         private var minLat = 0.0; private var maxLat = 1.0; private var minLon = 0.0; private var maxLon = 1.0
         private var path: Path? = null
@@ -2189,90 +2197,62 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         private fun timingTextSize(baseDp: Int) = dp(baseDp).toFloat() * liveTimingScale
 
         fun setSectorResult(number: Int, elapsedMs: Long, deltaMs: Long?) {
-            sectorTexts[number] = "S$number  ${formatTime(elapsedMs)}${deltaMs?.let { " ${formatDelta(it)}" } ?: ""}"
+            sectorResults[number] = SectorDisplay(elapsedMs, deltaMs)
             invalidate()
         }
 
-        fun clearSectorResult() { sectorTexts.clear(); invalidate() }
+        fun clearSectorResult() { sectorResults.clear(); invalidate() }
 
         override fun onDraw(canvas: Canvas) {
-            canvas.drawColor(Color.rgb(5, 16, 23))
-            val pad = dp(12).toFloat()
-            val fullWidth = width - pad * 2
-            val red = Color.rgb(238, 50, 62)
-            val green = Color.rgb(69, 223, 123)
-            val yellow = Color.rgb(247, 219, 74)
-            val deltaColor = when { delta == null -> Color.LTGRAY; delta!! < 0 -> green; else -> red }
-            val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(20, 28, 39) }
-            val darkPanelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(12, 19, 29) }
-            val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = red }
-            // Large live timing needs extra vertical room: otherwise the larger delta ascenders
-            // collide with the label above it.
-            val largeTextOffset = if (liveTimingScale > 1f) {
-                // Extra space grows more slowly than glyph size, keeping the final lap cards
-                // safely inside the fixed-height HUD even at the new larger setting.
-                dp((10f + (liveTimingScale - 1f) * 45f).toInt())
-            } else 0
-            val rowText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE; textSize = timingTextSize(17); typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            canvas.drawColor(Color.rgb(4, 5, 8))
+            val margin = dp(9).toFloat()
+            val green = Color.rgb(0, 238, 18)
+            val red = Color.rgb(255, 43, 56)
+            val magenta = Color.rgb(222, 61, 223)
+            val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(126, 135, 148); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
+            val black = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+            val gray = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(54, 60, 71) }
+            val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
+            val titleHeight = dp(32).toFloat()
+            val headerBottom = margin + titleHeight
+            canvas.drawRoundRect(margin, margin, width - margin, headerBottom, dp(5).toFloat(), dp(5).toFloat(), Paint(Paint.ANTI_ALIAS_FLAG).apply { color = green })
+            canvas.drawRoundRect(margin, margin, width - margin, headerBottom, dp(5).toFloat(), dp(5).toFloat(), outline)
+            text.color = Color.BLACK; text.textAlign = Paint.Align.CENTER; text.textSize = timingTextSize(17)
+            canvas.drawText("SECTORS", width / 2f, headerBottom - dp(9), text)
+
+            // Delta is the primary driving cue: it has its own high-contrast card.
+            val deltaTop = headerBottom + dp(7)
+            val deltaBottom = deltaTop + dp(62)
+            canvas.drawRoundRect(margin, deltaTop, width - margin, deltaBottom, dp(5).toFloat(), dp(5).toFloat(), black)
+            canvas.drawRoundRect(margin, deltaTop, width - margin, deltaBottom, dp(5).toFloat(), dp(5).toFloat(), outline)
+            text.textAlign = Paint.Align.LEFT; text.textSize = timingTextSize(13); text.color = Color.WHITE
+            canvas.drawText("DELTA SESSION", margin + dp(13), deltaTop + dp(18), text)
+            text.textAlign = Paint.Align.CENTER; text.textSize = timingTextSize(34)
+            val sessionDelta = delta
+            text.color = when { sessionDelta == null -> Color.LTGRAY; sessionDelta < 0 -> green; else -> red }
+            canvas.drawText(sessionDelta?.let(::formatDelta) ?: "--.---", width / 2f, deltaBottom - dp(11), text)
+
+            val summaryTop = deltaBottom + dp(7)
+            val summaryBottom = summaryTop + dp(91)
+            canvas.drawRoundRect(margin, summaryTop, width - margin, summaryBottom, dp(5).toFloat(), dp(5).toFloat(), black)
+            canvas.drawRoundRect(margin, summaryTop, width - margin, summaryBottom, dp(5).toFloat(), dp(5).toFloat(), outline)
+            val labelRight = margin + (width - margin * 2) * .27f
+            canvas.drawLine(labelRight, summaryTop, labelRight, summaryBottom, outline)
+            canvas.drawLine(margin, summaryTop + (summaryBottom - summaryTop) / 2f, labelRight, summaryTop + (summaryBottom - summaryTop) / 2f, outline)
+            text.color = Color.rgb(227, 231, 236); text.textAlign = Paint.Align.CENTER; text.textSize = timingTextSize(18)
+            canvas.drawText("LAP", (margin + labelRight) / 2f, summaryTop + dp(30), text)
+            canvas.drawText("BEST", (margin + labelRight) / 2f, summaryBottom - dp(13), text)
+            text.textAlign = Paint.Align.CENTER; text.textSize = timingTextSize(29)
+            text.color = Color.WHITE
+            canvas.drawText(elapsed?.let(::formatTime) ?: "--:--.---", (labelRight + width - margin) / 2f, summaryTop + dp(34), text)
+            text.color = magenta
+            canvas.drawText(best?.let(::formatTime) ?: "--:--.---", (labelRight + width - margin) / 2f, summaryBottom - dp(14), text)
+
+            val sectorTop = summaryBottom + dp(8)
+            val rowHeight = dp(47).toFloat()
+            (1..2).forEach { number ->
+                drawSectorDashboardRow(canvas, sectorTop + (number - 1) * rowHeight, rowHeight, number, sectorResults[number], margin, labelRight, green, red, gray, black, outline, text)
             }
-            val valueText = Paint(rowText).apply { textAlign = Paint.Align.RIGHT; textSize = timingTextSize(23) }
-
-            canvas.drawRect(0f, 0f, width.toFloat(), dp(28).toFloat(), darkPanelPaint)
-            canvas.drawRect(0f, 0f, dp(6).toFloat(), dp(28).toFloat(), accentPaint)
-            labelPaint.color = Color.rgb(218, 229, 235)
-            labelPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("PIT ENGINEER  //  LIVE TIMING", pad + dp(8), dp(20).toFloat(), labelPaint)
-            labelPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("GIRO $lapNumber", width - pad, dp(20).toFloat(), labelPaint)
-            if (recording) {
-                labelPaint.color = Color.rgb(255, 82, 92)
-                labelPaint.textAlign = Paint.Align.CENTER
-                canvas.drawText("● REC", width * .66f, dp(20).toFloat(), labelPaint)
-                labelPaint.color = Color.rgb(112, 157, 174)
-            }
-
-            canvas.drawRoundRect(pad, dp(38).toFloat(), width - pad, (dp(98) + largeTextOffset).toFloat(), dp(4).toFloat(), dp(4).toFloat(), panelPaint)
-            canvas.drawRect(pad, dp(38).toFloat(), pad + dp(6), (dp(98) + largeTextOffset).toFloat(), accentPaint)
-            labelPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("DELTA vs BEST LAP", pad + dp(18), (if (largeTextOffset > 0) dp(55) else dp(58)).toFloat(), labelPaint)
-            val deltaText = delta?.let { if (it < 0) "▲ ${formatDelta(it)}" else "▼ ${formatDelta(it)}" } ?: "± 0.00"
-            deltaPaint.color = deltaColor
-            deltaPaint.textAlign = Paint.Align.LEFT
-            deltaPaint.textSize = timingTextSize(42)
-            canvas.drawText(deltaText, pad + dp(18), (dp(91) + largeTextOffset).toFloat(), deltaPaint)
-            labelPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("BEST LAP", width - pad - dp(18), (if (largeTextOffset > 0) dp(55) else dp(58)).toFloat(), labelPaint)
-            bestPaint.color = Color.rgb(69, 223, 123)
-            bestPaint.textAlign = Paint.Align.RIGHT
-            bestPaint.textSize = timingTextSize(36)
-            canvas.drawText(best?.let(::formatTime) ?: "--:--.---", width - pad - dp(18), (dp(91) + largeTextOffset).toFloat(), bestPaint)
-
-            canvas.drawRect(pad, (dp(106) + largeTextOffset).toFloat(), width - pad, (dp(128) + largeTextOffset).toFloat(), darkPanelPaint)
-            labelPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("SECTOR", pad + dp(12), (dp(123) + largeTextOffset).toFloat(), labelPaint)
-            labelPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("TEMPO / DELTA", width - pad - dp(12), (dp(123) + largeTextOffset).toFloat(), labelPaint)
-            drawTimingRow(canvas, (dp(130) + largeTextOffset).toFloat(), "S1", sectorTexts[1] ?: "--:--.---", Color.rgb(70, 205, 255), rowText, valueText, panelPaint)
-            drawTimingRow(canvas, (dp(169) + largeTextOffset).toFloat(), "S2", sectorTexts[2] ?: "--:--.---", Color.rgb(255, 185, 64), rowText, valueText, darkPanelPaint)
-
-            // Extra vertical space keeps label and large time separate on compact Pixel screens.
-            val cardTop = (dp(210) + largeTextOffset).toFloat()
-            val cardBottom = cardTop + dp(if (largeTextOffset > 0) 65 else 68)
-            val gap = dp(7).toFloat()
-            val mid = width / 2f
-            canvas.drawRoundRect(pad, cardTop, mid - gap, cardBottom, dp(4).toFloat(), dp(4).toFloat(), darkPanelPaint)
-            canvas.drawRoundRect(mid + gap, cardTop, width - pad, cardBottom, dp(4).toFloat(), dp(4).toFloat(), panelPaint)
-            canvas.drawRect(pad, cardTop, pad + dp(5), cardBottom, Paint().apply { color = Color.rgb(238, 245, 247) })
-            canvas.drawRect(mid + gap, cardTop, mid + gap + dp(5), cardBottom, Paint().apply { color = green })
-            labelPaint.textAlign = Paint.Align.CENTER
-            lastPaint.textSize = timingTextSize(22)
-            canvas.drawText("LAST LAP", (pad + mid - gap) / 2f, cardTop + dp(17), labelPaint)
-            canvas.drawText(last?.let(::formatTime) ?: "--:--.---", (pad + mid - gap) / 2f, cardBottom - dp(10), lastPaint)
-            canvas.drawText("CURRENT LAP", (mid + gap + width - pad) / 2f, cardTop + dp(17), labelPaint)
-            val currentTime = elapsed?.let(::formatTime) ?: "--:--.---"
-            lastPaint.color = Color.rgb(238, 245, 247)
-            canvas.drawText(currentTime, (mid + gap + width - pad) / 2f, cardBottom - dp(10), lastPaint)
 
             val sessionsRight = width - dp(14).toFloat()
             val sessionsBottom = height - dp(14).toFloat()
@@ -2299,29 +2279,25 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             labelPaint.color = Color.rgb(174, 119, 255)
             canvas.drawText("PISTE", (tracksLeft + tracksRight) / 2f, sessionsTop + dp(24), labelPaint)
 
-            primaryPaint.textAlign = Paint.Align.CENTER
-            primaryPaint.textSize = timingTextSize(48)
-            deltaPaint.textAlign = Paint.Align.CENTER
-            deltaPaint.textSize = timingTextSize(25)
-            bestPaint.textAlign = Paint.Align.CENTER
-            bestPaint.textSize = timingTextSize(22)
-            labelPaint.color = Color.rgb(112, 157, 174)
-            labelPaint.textAlign = Paint.Align.CENTER
-            // Draw the outer frame last: the top live-timing bar otherwise paints over its top edge.
-            canvas.drawRoundRect(dp(2).toFloat(), dp(2).toFloat(), width - dp(2).toFloat(), height - dp(2).toFloat(), dp(9).toFloat(), dp(9).toFloat(), hudStrokePaint)
         }
 
-        private fun drawTimingRow(
-            canvas: Canvas, top: Float, name: String, value: String, accent: Int,
-            namePaint: Paint, valuePaint: Paint, background: Paint
+        private fun drawSectorDashboardRow(
+            canvas: Canvas, top: Float, height: Float, number: Int, result: SectorDisplay?, left: Float, labelRight: Float,
+            green: Int, red: Int, gray: Paint, black: Paint, outline: Paint, text: Paint
         ) {
-            val pad = dp(12).toFloat()
-            canvas.drawRect(pad, top, width - pad, top + dp(35), background)
-            canvas.drawRect(pad, top, pad + dp(5), top + dp(35), Paint().apply { color = accent })
-            namePaint.textAlign = Paint.Align.LEFT
-            canvas.drawText(name, pad + dp(17), top + dp(25), namePaint)
-            valuePaint.color = accent
-            canvas.drawText(value, width - pad - dp(14), top + dp(26), valuePaint)
+            canvas.drawRect(left, top, width - left, top + height, black)
+            canvas.drawRect(left, top, labelRight, top + height, gray)
+            canvas.drawRect(left, top, width - left, top + height, outline)
+            text.textAlign = Paint.Align.CENTER; text.textSize = timingTextSize(18); text.color = Color.WHITE
+            canvas.drawText("S$number", (left + labelRight) / 2f, top + height * .64f, text)
+            val delta = result?.deltaMs
+            text.textSize = timingTextSize(17); text.color = when { delta == null -> Color.LTGRAY; delta < 0 -> green; else -> red }
+            canvas.drawText(delta?.let(::formatDelta) ?: "--.--", labelRight + (width - left - labelRight) * .27f, top + height * .64f, text)
+            text.textAlign = Paint.Align.RIGHT; text.textSize = timingTextSize(12); text.color = Color.WHITE
+            canvas.drawText(result?.elapsedMs?.let(::formatTime) ?: "--:--.---", width - left - dp(8), top + height * .43f, text)
+            text.color = green
+            val reference = result?.let { display -> display.deltaMs?.let { display.elapsedMs - it } }
+            canvas.drawText(reference?.let(::formatTime) ?: "--:--.---", width - left - dp(8), top + height * .79f, text)
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
