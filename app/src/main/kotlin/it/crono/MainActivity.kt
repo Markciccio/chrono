@@ -2608,9 +2608,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun engineerDeltaMessage(ms: Long, elapsedMs: Long): String {
-        val amount = spokenDelta(ms)
-            .removePrefix("Avanti di ")
-            .removePrefix("Sei dietro di ")
+        // Qui serve solo la quantità: spokenDelta() contiene già anche la direzione
+        // ("sei avanti di" / "sei in ritardo di") e concatenarla ai messaggi
+        // dell'ingegnere produceva frasi errate come "Ritardo, sei in ritardo".
+        val amount = spokenStopwatch(abs(ms))
         val variants = if (ms < 0) listOf(
             "Delta negativo di $amount",
             "Guadagno di $amount",
@@ -2643,7 +2644,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun recoveryDeltaMessage(currentMs: Long, previousMs: Long, elapsedMs: Long): String {
-        val recovered = spokenDelta(previousMs - currentMs).removePrefix("Sei dietro di ")
+        val recovered = spokenStopwatch(abs(previousMs - currentMs))
         val current = formatDelta(currentMs)
         val variants = listOf(
             "Delta $current, recuperi $recovered",
