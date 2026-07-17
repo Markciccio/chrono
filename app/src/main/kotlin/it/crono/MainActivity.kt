@@ -1665,6 +1665,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         private fun sectorTimes(lap: RecordedLap): List<Long?> = if (analysisSectors.isNotEmpty()) {
             analysisSectors.map { line -> elapsedAtLine(lap.samples, line) }
         } else lap.sectorElapsedMs.map { it }
+        private val bestSectorTimes = List(sectorCount) { sector ->
+            validLaps.mapNotNull { lap -> sectorTimes(lap).getOrNull(sector) }.minOrNull()
+        }
         /** The ideal lap is the sum of the best independently recorded segments.  A partial
          * lap must not hide it: only the segment that lacks a reading is ignored. */
         private val ideal = if (sectorCount > 0) {
@@ -1748,7 +1751,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 rowPaint.color = Color.rgb(255, 205, 90)
                 val lapSectors = sectorTimes(lap)
                 repeat(sectorCount) { sector ->
-                    canvas.drawText(lapSectors.getOrNull(sector)?.let(::formatTime) ?: "—", columns[3 + sector], y, rowPaint)
+                    val value = lapSectors.getOrNull(sector)
+                    rowPaint.color = if (lap.valid && value != null && value == bestSectorTimes[sector]) Color.rgb(69, 223, 123) else Color.rgb(255, 205, 90)
+                    canvas.drawText(value?.let(::formatTime) ?: "—", columns[3 + sector], y, rowPaint)
                 }
                 rowPaint.color = Color.rgb(255, 112, 112)
                 canvas.drawText(lap.samples.maxOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[3 + sectorCount], y, rowPaint)
