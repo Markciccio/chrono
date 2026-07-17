@@ -1357,6 +1357,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             setTrack(lap.samples.map { TrackPoint(it.lat, it.lon) })
             setTimingLine(finish)
             setSectors(sectors)
+            setSpeedMarkers(speedMarkersForLap(lap))
             postDelayed({ fitEntireTrack() }, 500)
         }
         val summary = speedSummary(lap)
@@ -1370,7 +1371,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             textSize = 24f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
         })
         info.addView(TextView(this).apply {
-            text = "\nV MAX  ${summary.maxKmh} km/h\nV MIN  ${summary.minKmh} km/h\n\nFRENATA  ${summary.brakingMinKmh} km/h\nUSCITA CURVA  ${summary.accelerationMaxKmh} km/h"
+            text = "\nV MAX  ${summary.maxKmh} km/h\nV MIN  ${summary.minKmh} km/h\n\nSULLA MAPPA\nF = fine frenata · A = fine accelerazione\n\nFRENATA  ${summary.brakingMinKmh} km/h\nUSCITA CURVA  ${summary.accelerationMaxKmh} km/h"
             textSize = 16f; setTextColor(Color.rgb(184, 223, 235))
         }, LinearLayout.LayoutParams(-1, 0, 1f))
         info.addView(actionButton("SALVA COME PISTA") {
@@ -1389,6 +1390,56 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private data class LapSpeedSummary(val maxKmh: Int, val minKmh: Int, val brakingMinKmh: Int, val accelerationMaxKmh: Int)
+
+    /**
+     * Finds useful turning points in a speed trace.  Raw phone GPS speed fluctuates, so we
+     * smooth it first and only retain extrema that differ meaningfully from both sides.
+     * F = end of braking, A = end of the following acceleration.
+     */
+    private fun speedMarkersForLap(lap: RecordedLap): List<SpeedMarker> {
+        val samples = lap.samples
+        if (samples.size < 9) return emptyList()
+        val raw = samples.map { it.speedMps * 3.6f }
+        val smooth = raw.indices.map { index ->
+            val from = (index - 2).coerceAtLeast(0)
+            val to = (index + 2).coerceAtMost(raw.lastIndex)
+            raw.subList(from, to + 1).average().toFloat()
+        }
+        data class Candidate(val index: Int, val braking: Boolean)
+        val candidates = mutableListOf<Candidate>()
+        val radius = 3
+        for (index in radius until smooth.size - radius) {
+            val before = smooth.subList(index - radius, index)
+            val after = smooth.subList(index + 1, index + radius + 1)
+            val value = smooth[index]
+            val isMinimum = value <= before.minOrNull()!! && value <= after.minOrNull()!! &&
+                before.maxOrNull()!! - value >= 4f && after.maxOrNull()!! - value >= 4f
+            val isMaximum = value >= before.maxOrNull()!! && value >= after.maxOrNull()!! &&
+                value - before.minOrNull()!! >= 4f && value - after.minOrNull()!! >= 4f
+            if (isMinimum) candidates += Candidate(index, braking = true)
+            if (isMaximum) candidates += Candidate(index, braking = false)
+        }
+        // A flat GPS plateau can produce neighbouring extrema: retain one marker per 2.5 s.
+        val selected = mutableListOf<Candidate>()
+        candidates.forEach { candidate ->
+            val previous = selected.lastOrNull()
+            if (previous == null || samples[candidate.index].timeMs - samples[previous.index].timeMs >= 2_500L) {
+                selected += candidate
+            } else {
+                val previousValue = smooth[previous.index]
+                val currentValue = smooth[candidate.index]
+                val replace = if (candidate.braking) currentValue < previousValue else currentValue > previousValue
+                if (replace) selected[selected.lastIndex] = candidate
+            }
+        }
+        return selected.map { candidate ->
+            SpeedMarker(
+                TrackPoint(samples[candidate.index].lat, samples[candidate.index].lon),
+                smooth[candidate.index].toInt(),
+                if (candidate.braking) "braking" else "acceleration"
+            )
+        }
+    }
 
     private fun speedSummary(lap: RecordedLap): LapSpeedSummary {
         val speeds = lap.samples.map { (it.speedMps * 3.6f).toInt() }
