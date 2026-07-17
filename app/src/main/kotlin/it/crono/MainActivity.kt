@@ -96,6 +96,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var sectorReferences: List<SectorReference> = emptyList()
     private var lastAnnouncedDeltaMs: Long? = null
     private var lastAnnouncedDeltaTrend: String? = null
+    /** The last two spoken deltas, oldest first. */
+    private val recentAnnouncedDeltas = ArrayDeque<Long>()
     private var previousLiveDeltaMs: Long? = null
     /** A lap call has radio priority over any live-delta call. */
     private var deltaAnnouncementsSuppressedUntilMs = Long.MIN_VALUE
@@ -1168,6 +1170,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
                 lastAnnouncedDeltaMs = null
                 lastAnnouncedDeltaTrend = null
+                recentAnnouncedDeltas.clear()
                 previousLiveDeltaMs = null
                 sectorVoiceAnnouncementCount = 0
                 currentSectorTimes.clear()
@@ -1191,6 +1194,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 lastDeltaAnnouncementElapsedMs = event.elapsedMs
                 lastAnnouncedDeltaMs = delta
                 lastAnnouncedDeltaTrend = null
+                recentAnnouncedDeltas.clear()
                 previousLiveDeltaMs = delta
                 dashboard.setSectorResult(event.number, event.elapsedMs, delta)
                 if (voiceBriefingMode != VoiceBriefingMode.LAPS_ONLY) {
@@ -1256,6 +1260,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
                 lastAnnouncedDeltaMs = null
                 lastAnnouncedDeltaTrend = null
+                recentAnnouncedDeltas.clear()
                 previousLiveDeltaMs = null
                 // The five-second suppression is armed by the TTS completion callback,
                 // so it starts after the complete lap message has been spoken.
@@ -1287,7 +1292,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             (lastReported != null && current >= lastReported + 350) || (previous != null && current >= previous + 400)
         )
         val deltaCallAllowed = sample.timeMs >= deltaAnnouncementsSuppressedUntilMs
-        val trend = deltaTrend(current, lastReported)
+        val trend = deltaTrend(current, recentAnnouncedDeltas.toList())
         val trendCall = trend != null && trend != lastAnnouncedDeltaTrend && improvementCooldownPassed
         if (voiceBriefingMode == VoiceBriefingMode.ALL && deltaCallAllowed && !closeToSector && (improvingDelta || suddenLoss || trendCall)) {
             lastDeltaAnnouncementElapsedMs = elapsed
@@ -1301,6 +1306,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             speak(message, flush = false)
             lastAnnouncedDeltaMs = current
             lastAnnouncedDeltaTrend = trend ?: "normal"
+            recentAnnouncedDeltas.addLast(current)
+            while (recentAnnouncedDeltas.size > 2) recentAnnouncedDeltas.removeFirst()
         }
         previousLiveDeltaMs = current
     }
@@ -2584,6 +2591,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
         lastAnnouncedDeltaMs = null
         lastAnnouncedDeltaTrend = null
+        recentAnnouncedDeltas.clear()
         previousLiveDeltaMs = null
         deltaAnnouncementsSuppressedUntilMs = Long.MIN_VALUE
         if (savedTrackToKeep != null) {
@@ -2649,13 +2657,16 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
     }
 
-    private fun deltaTrend(currentMs: Long, previousAnnouncedMs: Long?): String? {
-        val previous = previousAnnouncedMs ?: return null
+    private fun deltaTrend(currentMs: Long, history: List<Long>): String? {
+        val previous = history.lastOrNull() ?: return null
+        val beforePrevious = history.getOrNull(history.lastIndex - 1)
+        val change = currentMs - previous
+        val previousChange = beforePrevious?.let { previous - it }
         return when {
             previous <= -500L && currentMs >= 0L -> "lost_advantage"
-            previous < 0L && currentMs < previous - 100L -> "advantage_growing"
-            previous > 0L && currentMs > previous + 100L -> "behind_growing"
-            abs(currentMs - previous) <= 100L && abs(currentMs) >= 300L -> "stable"
+            previous < 0L && currentMs < previous - 100L && (previousChange == null || previousChange <= -50L) -> "advantage_growing"
+            previous > 0L && currentMs > previous + 100L && (previousChange == null || previousChange >= 50L) -> "behind_growing"
+            abs(change) <= 100L && (previousChange == null || abs(previousChange) <= 100L) && abs(currentMs) >= 300L -> "stable"
             else -> null
         }
     }
