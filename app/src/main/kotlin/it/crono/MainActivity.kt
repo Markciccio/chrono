@@ -95,6 +95,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private val sessionSamples = mutableListOf<GpsSample>()
     private var sectorReferences: List<SectorReference> = emptyList()
     private var lastAnnouncedDeltaMs: Long? = null
+    private var lastAnnouncedDeltaTrend: String? = null
     private var previousLiveDeltaMs: Long? = null
     /** A lap call has radio priority over any live-delta call. */
     private var deltaAnnouncementsSuppressedUntilMs = Long.MIN_VALUE
@@ -1166,6 +1167,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 liveDeltaMs = null
                 lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
                 lastAnnouncedDeltaMs = null
+                lastAnnouncedDeltaTrend = null
                 previousLiveDeltaMs = null
                 sectorVoiceAnnouncementCount = 0
                 currentSectorTimes.clear()
@@ -1188,6 +1190,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 liveDeltaMs = delta
                 lastDeltaAnnouncementElapsedMs = event.elapsedMs
                 lastAnnouncedDeltaMs = delta
+                lastAnnouncedDeltaTrend = null
                 previousLiveDeltaMs = delta
                 dashboard.setSectorResult(event.number, event.elapsedMs, delta)
                 if (voiceBriefingMode != VoiceBriefingMode.LAPS_ONLY) {
@@ -1252,6 +1255,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 dashboard.clearSectorResult()
                 lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
                 lastAnnouncedDeltaMs = null
+                lastAnnouncedDeltaTrend = null
                 previousLiveDeltaMs = null
                 // The five-second suppression is armed by the TTS completion callback,
                 // so it starts after the complete lap message has been spoken.
@@ -1283,15 +1287,20 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             (lastReported != null && current >= lastReported + 350) || (previous != null && current >= previous + 400)
         )
         val deltaCallAllowed = sample.timeMs >= deltaAnnouncementsSuppressedUntilMs
-        if (voiceBriefingMode == VoiceBriefingMode.ALL && deltaCallAllowed && !closeToSector && (improvingDelta || suddenLoss)) {
+        val trend = deltaTrend(current, lastReported)
+        val trendCall = trend != null && trend != lastAnnouncedDeltaTrend && improvementCooldownPassed
+        if (voiceBriefingMode == VoiceBriefingMode.ALL && deltaCallAllowed && !closeToSector && (improvingDelta || suddenLoss || trendCall)) {
             lastDeltaAnnouncementElapsedMs = elapsed
-            val message = if (improvingDelta && current >= 0 && lastReported != null) {
+            val message = if (trendCall) {
+                engineerDeltaMessage(current, elapsed, trend)
+            } else if (improvingDelta && current >= 0 && lastReported != null) {
                 recoveryDeltaMessage(current, lastReported, elapsed)
             } else {
-                engineerDeltaMessage(current, elapsed)
+                engineerDeltaMessage(current, elapsed, null)
             }
             speak(message, flush = false)
             lastAnnouncedDeltaMs = current
+            lastAnnouncedDeltaTrend = trend ?: "normal"
         }
         previousLiveDeltaMs = current
     }
@@ -2574,6 +2583,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         liveDeltaMs = null
         lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
         lastAnnouncedDeltaMs = null
+        lastAnnouncedDeltaTrend = null
         previousLiveDeltaMs = null
         deltaAnnouncementsSuppressedUntilMs = Long.MIN_VALUE
         if (savedTrackToKeep != null) {
@@ -2639,9 +2649,43 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
     }
 
-    private fun engineerDeltaMessage(ms: Long, elapsedMs: Long): String {
+    private fun deltaTrend(currentMs: Long, previousAnnouncedMs: Long?): String? {
+        val previous = previousAnnouncedMs ?: return null
+        return when {
+            previous <= -500L && currentMs >= 0L -> "lost_advantage"
+            previous < 0L && currentMs < previous - 100L -> "advantage_growing"
+            previous > 0L && currentMs > previous + 100L -> "behind_growing"
+            abs(currentMs - previous) <= 100L && abs(currentMs) >= 300L -> "stable"
+            else -> null
+        }
+    }
+
+    private fun engineerDeltaMessage(ms: Long, elapsedMs: Long, trend: String?): String {
         val amount = spokenStopwatch(abs(ms))
-        val variants = if (ms < 0) listOf(
+        val contextual = when (trend) {
+            "lost_advantage" -> listOf(
+                "Hai perso tutto il vantaggio",
+                "Vantaggio annullato",
+                "Hai buttato via il margine"
+            )
+            "advantage_growing" -> listOf(
+                "Stai aumentando il vantaggio, ora sei avanti di $amount",
+                "Vantaggio in crescita, sei avanti di $amount",
+                "Continui a guadagnare, sei avanti di $amount"
+            )
+            "behind_growing" -> listOf(
+                "Stai perdendo terreno, sei in ritardo di $amount",
+                "Il ritardo aumenta, ora sei dietro di $amount",
+                "Stai lasciando tempo, perdi $amount"
+            )
+            "stable" -> listOf(
+                "Vantaggio stabile",
+                "Distacco stabile",
+                "Il delta resta stabile"
+            )
+            else -> emptyList()
+        }
+        val variants = if (contextual.isNotEmpty()) contextual else if (ms < 0) listOf(
             "Sei avanti di $amount",
             "Guadagni $amount",
             "Stai recuperando $amount",
