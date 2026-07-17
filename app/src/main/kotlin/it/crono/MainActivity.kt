@@ -58,6 +58,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         AUTO("Automatica", ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED)
     }
     private data class SectorDisplay(val elapsedMs: Long, val deltaMs: Long?)
+    private data class DistanceComparison(
+        val distanceM: DoubleArray, val speedA: FloatArray, val speedB: FloatArray,
+        val cumulativeMs: FloatArray, val localMs: FloatArray, val sectorFractions: List<Float>
+    )
+    private data class LocalDeltaBin(val start: Int, val end: Int, val deltaMs: Float)
 
     private lateinit var locationManager: LocationManager
     private lateinit var dashboard: RaceView
@@ -1625,6 +1630,216 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
     }
 
+    /** GPS-only telemetry comparison on a one-metre distance grid.
+     * A is the analysed lap; B is the best lap. Positive delta means A gains time. */
+    private inner class DistanceDeltaComparisonView(
+        private val analysed: RecordedLap,
+        private val best: RecordedLap,
+        sectorLines: List<TimingLine>
+    ) : View(this@MainActivity) {
+        private val comparison = buildComparison(analysed, best, sectorLines)
+        private var windowMeters = 10
+        private var cursor = -1
+        private var chartLeft = 0f
+        private var chartRight = 1f
+        private val panel = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(3, 9, 14) }
+        private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(61, 112, 131); style = Paint.Style.STROKE; strokeWidth = dp(1).toFloat() }
+        private val grid = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(33, 58, 70); strokeWidth = dp(1).toFloat() }
+        private val white = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(224, 238, 244); textSize = dp(13).toFloat(); typeface = Typeface.DEFAULT_BOLD }
+        private val green = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 232, 31); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
+        private val red = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 61, 72); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
+        private val cyan = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(35, 151, 255); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
+
+        fun setLocalWindowMeters(meters: Int) { windowMeters = meters; invalidate() }
+
+        override fun onDraw(canvas: Canvas) {
+            canvas.drawColor(Color.rgb(3, 9, 14))
+            canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), dp(6).toFloat(), dp(6).toFloat(), panel)
+            canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), dp(6).toFloat(), dp(6).toFloat(), border)
+            chartLeft = dp(42).toFloat(); chartRight = width - dp(20).toFloat()
+            val topSpeed = dp(58).toFloat(); val bottomSpeed = height * .29f
+            val topCumulative = height * .38f; val bottomCumulative = height * .58f
+            val topLocal = height * .68f; val bottomLocal = height - dp(58).toFloat()
+            drawTitle(canvas, "VELOCITÀ / DISTANZA", dp(14).toFloat())
+            drawSpeedChart(canvas, topSpeed, bottomSpeed)
+            drawTitle(canvas, "DELTA TEMPO CUMULATIVO / DISTANZA", topCumulative - dp(13))
+            drawCumulativeChart(canvas, topCumulative, bottomCumulative)
+            drawTitle(canvas, "GUADAGNO / PERDITA LOCALE — FINESTRA ${windowMeters} m", topLocal - dp(13))
+            drawLocalChart(canvas, topLocal, bottomLocal)
+            drawLegend(canvas)
+            drawCursor(canvas, topSpeed, bottomLocal)
+        }
+
+        private fun drawTitle(canvas: Canvas, title: String, y: Float) {
+            white.textAlign = Paint.Align.LEFT; white.textSize = dp(15).toFloat(); white.color = Color.WHITE
+            canvas.drawText(title, dp(12).toFloat(), y, white)
+        }
+
+        private fun drawGrid(canvas: Canvas, top: Float, bottom: Float, zero: Float? = null) {
+            (0..3).forEach { i ->
+                val y = top + (bottom - top) * i / 3f
+                canvas.drawLine(chartLeft, y, chartRight, y, grid)
+            }
+            comparison.sectorFractions.forEachIndexed { index, fraction ->
+                val x = chartLeft + (chartRight - chartLeft) * fraction
+                canvas.drawLine(x, top, x, bottom, Paint(grid).apply { color = Color.rgb(156, 111, 255); strokeWidth = dp(1).toFloat() })
+                white.textSize = dp(10).toFloat(); white.color = Color.rgb(185, 131, 255); white.textAlign = Paint.Align.CENTER
+                canvas.drawText("S${index + 1}", x, top + dp(12), white)
+            }
+            zero?.let { canvas.drawLine(chartLeft, it, chartRight, it, Paint(grid).apply { color = Color.WHITE; strokeWidth = dp(1).toFloat() }) }
+        }
+
+        private fun drawSpeedChart(canvas: Canvas, top: Float, bottom: Float) {
+            val maxSpeed = maxOf(comparison.speedA.maxOrNull() ?: 1f, comparison.speedB.maxOrNull() ?: 1f, 10f)
+            drawGrid(canvas, top, bottom)
+            drawTrace(canvas, comparison.speedB, top, bottom, maxSpeed, red)
+            drawTrace(canvas, comparison.speedA, top, bottom, maxSpeed, green)
+            white.textSize = dp(11).toFloat(); white.color = Color.LTGRAY; white.textAlign = Paint.Align.LEFT
+            canvas.drawText("0", dp(8).toFloat(), bottom, white)
+            canvas.drawText("${maxSpeed.toInt()} km/h", dp(8).toFloat(), top + dp(10), white)
+        }
+
+        private fun drawTrace(canvas: Canvas, values: FloatArray, top: Float, bottom: Float, max: Float, paint: Paint) {
+            if (values.size < 2) return
+            val path = Path()
+            values.forEachIndexed { index, value ->
+                val x = chartLeft + (chartRight - chartLeft) * index / (values.size - 1).toFloat()
+                val y = bottom - (bottom - top) * (value / max).coerceIn(0f, 1f)
+                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            canvas.drawPath(path, paint)
+        }
+
+        private fun drawCumulativeChart(canvas: Canvas, top: Float, bottom: Float) {
+            val maxDelta = maxOf(comparison.cumulativeMs.maxOfOrNull { abs(it) } ?: 100f, 100f)
+            val zero = (top + bottom) / 2f
+            drawGrid(canvas, top, bottom, zero)
+            if (comparison.cumulativeMs.size < 2) return
+            comparison.cumulativeMs.indices.drop(1).forEach { index ->
+                val x1 = xAt(index - 1); val x2 = xAt(index)
+                val y1 = zero - (bottom - top) * .43f * (comparison.cumulativeMs[index - 1] / maxDelta).coerceIn(-1f, 1f)
+                val y2 = zero - (bottom - top) * .43f * (comparison.cumulativeMs[index] / maxDelta).coerceIn(-1f, 1f)
+                val paint = if ((comparison.cumulativeMs[index - 1] + comparison.cumulativeMs[index]) >= 0f) green else red
+                canvas.drawLine(x1, y1, x2, y2, paint)
+            }
+            white.textSize = dp(11).toFloat(); white.color = Color.LTGRAY; white.textAlign = Paint.Align.LEFT
+            canvas.drawText("+${"%.2f".format(Locale.US, maxDelta / 1_000f)} s", dp(3).toFloat(), top + dp(10), white)
+            canvas.drawText("−${"%.2f".format(Locale.US, maxDelta / 1_000f)} s", dp(3).toFloat(), bottom, white)
+        }
+
+        private fun localBins(): List<LocalDeltaBin> {
+            val values = comparison.localMs
+            val window = maxOf(1, windowMeters)
+            return generateSequence(1) { previous -> (previous + window).takeIf { it < values.size } }
+                .map { start ->
+                    val end = minOf(values.lastIndex, start + window - 1)
+                    LocalDeltaBin(start, end, (start..end).sumOf { values[it].toDouble() }.toFloat())
+                }.toList()
+        }
+
+        private fun drawLocalChart(canvas: Canvas, top: Float, bottom: Float) {
+            val bins = localBins(); if (bins.isEmpty()) return
+            val maxLocal = maxOf(bins.maxOf { abs(it.deltaMs) }, 25f)
+            val zero = (top + bottom) / 2f
+            drawGrid(canvas, top, bottom, zero)
+            val gains = bins.sortedByDescending { it.deltaMs }.take(5).toSet()
+            val losses = bins.sortedBy { it.deltaMs }.take(5).toSet()
+            bins.forEach { bin ->
+                val x = (xAt(bin.start) + xAt(bin.end)) / 2f
+                val y = zero - (bottom - top) * .43f * (bin.deltaMs / maxLocal).coerceIn(-1f, 1f)
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = if (bin.deltaMs >= 0f) Color.rgb(0, 232, 31) else Color.rgb(255, 61, 72)
+                    strokeWidth = if (bin in gains || bin in losses) dp(5).toFloat() else dp(3).toFloat()
+                }
+                canvas.drawLine(x, zero, x, y, paint)
+            }
+            white.textSize = dp(11).toFloat(); white.color = Color.rgb(0, 232, 31); white.textAlign = Paint.Align.LEFT
+            canvas.drawText("+ guadagno A", chartLeft, top + dp(12), white)
+            white.color = Color.rgb(255, 61, 72); white.textAlign = Paint.Align.RIGHT
+            canvas.drawText("− vantaggio B", chartRight, bottom - dp(5), white)
+        }
+
+        private fun drawLegend(canvas: Canvas) {
+            val y = height - dp(22).toFloat()
+            white.textSize = dp(13).toFloat(); white.textAlign = Paint.Align.LEFT
+            white.color = green.color; canvas.drawText("— Pilota A / giro analizzato", dp(14).toFloat(), y, white)
+            white.color = red.color; canvas.drawText("— Pilota B / best lap", width * .42f, y, white)
+            white.color = Color.LTGRAY; canvas.drawText("A positivo = guadagna", width * .70f, y, white)
+        }
+
+        private fun drawCursor(canvas: Canvas, top: Float, bottom: Float) {
+            val index = cursor.takeIf { it in comparison.distanceM.indices } ?: return
+            val x = xAt(index)
+            canvas.drawLine(x, top, x, bottom, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; strokeWidth = dp(1).toFloat() })
+            val local = comparison.localMs[index]
+            val text = "${comparison.distanceM[index].toInt()} m  ·  Δ ${"%+.3f".format(Locale.US, comparison.cumulativeMs[index] / 1_000f)} s  ·  locale ${"%+.0f".format(Locale.US, local)} ms\nA ${comparison.speedA[index].toInt()} km/h  ·  B ${comparison.speedB[index].toInt()} km/h"
+            val box = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(230, 5, 18, 25) }
+            canvas.drawRoundRect(dp(50).toFloat(), dp(30).toFloat(), width - dp(58).toFloat(), dp(74).toFloat(), dp(4).toFloat(), dp(4).toFloat(), box)
+            white.color = Color.WHITE; white.textSize = dp(12).toFloat(); white.textAlign = Paint.Align.LEFT
+            text.split('\n').forEachIndexed { row, line -> canvas.drawText(line, dp(58).toFloat(), dp(47 + row * 17).toFloat(), white) }
+        }
+
+        private fun xAt(index: Int) = chartLeft + (chartRight - chartLeft) * index / (comparison.distanceM.size - 1).toFloat()
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_MOVE) {
+                val fraction = ((event.x - chartLeft) / (chartRight - chartLeft)).coerceIn(0f, 1f)
+                cursor = (fraction * (comparison.distanceM.size - 1)).toInt()
+                invalidate()
+            }
+            return true
+        }
+
+        private fun buildComparison(a: RecordedLap, b: RecordedLap, sectors: List<TimingLine>): DistanceComparison {
+            val pathA = cumulativeDistance(a.samples); val pathB = cumulativeDistance(b.samples)
+            val commonLength = pathB.last().coerceAtLeast(20.0)
+            val pointCount = commonLength.toInt().coerceAtLeast(2) + 1
+            val grid = DoubleArray(pointCount) { index -> commonLength * index / (pointCount - 1) }
+            val speedA = resampleSpeed(a, pathA, grid, commonLength)
+            val speedB = resampleSpeed(b, pathB, grid, commonLength)
+            val rawA = DoubleArray(pointCount); val rawB = DoubleArray(pointCount)
+            for (index in 1 until pointCount) {
+                val step = grid[index] - grid[index - 1]
+                rawA[index] = step / (speedA[index].toDouble() / 3.6).coerceAtLeast(.8)
+                rawB[index] = step / (speedB[index].toDouble() / 3.6).coerceAtLeast(.8)
+            }
+            val scaleA = (a.durationMs / 1_000.0) / rawA.sum().coerceAtLeast(.01)
+            val scaleB = (b.durationMs / 1_000.0) / rawB.sum().coerceAtLeast(.01)
+            val local = FloatArray(pointCount); val cumulative = FloatArray(pointCount)
+            for (index in 1 until pointCount) {
+                // Positive: A needs less time than B and therefore gains.
+                local[index] = ((rawB[index] * scaleB - rawA[index] * scaleA) * 1_000.0).toFloat()
+                cumulative[index] = cumulative[index - 1] + local[index]
+            }
+            // Eliminate any floating rounding residual: endpoint exactly matches lap-time difference.
+            cumulative[cumulative.lastIndex] = (b.durationMs - a.durationMs).toFloat()
+            val sectorFractions = sectors.mapNotNull { line ->
+                val index = Geo.nearestRouteIndex(lineCenter(line), b.samples.map { TrackPoint(it.lat, it.lon) })
+                (pathB[index] / commonLength).toFloat().takeIf { it in .02f..0.98f }
+            }
+            return DistanceComparison(grid, speedA, speedB, cumulative, local, sectorFractions)
+        }
+
+        private fun cumulativeDistance(samples: List<GpsSample>): DoubleArray {
+            val result = DoubleArray(samples.size)
+            for (index in 1 until samples.size) result[index] = result[index - 1] + Geo.distanceM(samples[index - 1].lat, samples[index - 1].lon, samples[index].lat, samples[index].lon)
+            return result
+        }
+
+        private fun resampleSpeed(lap: RecordedLap, path: DoubleArray, grid: DoubleArray, commonLength: Double): FloatArray {
+            val ownLength = path.last().coerceAtLeast(.01)
+            var segment = 1
+            return FloatArray(grid.size) { index ->
+                val target = grid[index] / commonLength * ownLength
+                while (segment < path.lastIndex && path[segment] < target) segment++
+                val previous = (segment - 1).coerceAtLeast(0)
+                val distance = (path[segment] - path[previous]).takeIf { it > .01 } ?: 1.0
+                val fraction = ((target - path[previous]) / distance).coerceIn(0.0, 1.0)
+                (lap.samples[previous].speedMps.toDouble() + (lap.samples[segment].speedMps - lap.samples[previous].speedMps).toDouble() * fraction).toFloat() * 3.6f
+            }
+        }
+    }
+
     private fun showSpeedComparison(session: SavedSession, lap: RecordedLap) {
         val best = session.laps.filter { it.valid }.minByOrNull { it.durationMs }
         if (best == null || best.samples.size < 3) {
@@ -1634,7 +1849,14 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val root = FrameLayout(this).apply { setBackgroundColor(Color.rgb(3, 9, 14)) }
-        root.addView(SpeedComparisonView(lap, best), FrameLayout.LayoutParams(-1, -1).apply { setMargins(dp(12), dp(12), dp(12), dp(12)) })
+        val geometry = geometryForSession(session, lap)
+        val comparison = DistanceDeltaComparisonView(lap, best, geometry.sectors)
+        root.addView(comparison, FrameLayout.LayoutParams(-1, -1).apply { setMargins(dp(12), dp(12), dp(12), dp(62)) })
+        val windows = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        listOf(5, 10, 20, 50).forEach { meters ->
+            windows.addView(actionButton("${meters} m") { comparison.setLocalWindowMeters(meters) }, LinearLayout.LayoutParams(dp(62), dp(38)).apply { setMargins(dp(3), 0, dp(3), 0) })
+        }
+        root.addView(windows, FrameLayout.LayoutParams(-2, dp(42), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(8) })
         root.addView(actionButton("CHIUDI") { dialog.dismiss() }, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.TOP or Gravity.END).apply { topMargin = dp(22); rightMargin = dp(22) })
         dialog.setContentView(root)
         dialog.show()
