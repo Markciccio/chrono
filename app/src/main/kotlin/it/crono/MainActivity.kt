@@ -395,10 +395,15 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         fun selectedText() = if (selection == -1) "TRAGUARDO" else "SETTORE ${selection + 1}"
         fun redraw() {
             val ordered = orderedIndexes()
+            val selectedIndex = if (selection == -1) finishIndex else sectorIndexes[selection]
             map.setTrack(points)
             map.setTimingLine(markerLine(finishIndex))
             map.setSectors(ordered.map(::markerLine))
-            selectedLabel.text = "${selectedText()} · usa − / + per spostarlo lungo la traccia"
+            // The red point is the centre of the selected timing line, making translation
+            // obvious even in a tight bend where the line also changes its tangent angle.
+            val selectedSample = track.lap.samples[selectedIndex]
+            map.setFix(selectedSample)
+            selectedLabel.text = "${selectedText()} · centro rosso · − / + spostano di 20 m lungo la traccia"
         }
         fun chooseMarker() {
             val choices = mutableListOf("TRAGUARDO")
@@ -406,9 +411,20 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             AlertDialog.Builder(this).setTitle("Seleziona elemento da spostare")
                 .setItems(choices.toTypedArray()) { _, which -> selection = which - 1; redraw() }.show()
         }
-        fun shiftMarker(delta: Int) {
-            if (selection == -1) finishIndex = (finishIndex + delta + points.size) % points.size
-            else sectorIndexes[selection] = (sectorIndexes[selection] + delta + points.size) % points.size
+        fun shiftAlongTrack(index: Int, direction: Int, targetDistanceM: Double = 20.0): Int {
+            var result = index
+            var traveled = 0.0
+            var guard = 0
+            while (traveled < targetDistanceM && guard++ < points.size) {
+                val next = (result + direction + points.size) % points.size
+                traveled += Geo.distanceM(points[result].lat, points[result].lon, points[next].lat, points[next].lon)
+                result = next
+            }
+            return result
+        }
+        fun shiftMarker(direction: Int) {
+            if (selection == -1) finishIndex = shiftAlongTrack(finishIndex, direction)
+            else sectorIndexes[selection] = shiftAlongTrack(sectorIndexes[selection], direction)
             redraw()
         }
         fun addSector() {
@@ -441,8 +457,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         info.addView(selectedLabel)
         info.addView(actionButton("SELEZIONA") { chooseMarker() }, LinearLayout.LayoutParams(-1, dp(42)))
         val moveRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        moveRow.addView(actionButton("−") { shiftMarker(-3) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(3) })
-        moveRow.addView(actionButton("+") { shiftMarker(3) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(3) })
+        moveRow.addView(actionButton("− 20 m") { shiftMarker(-1) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(3) })
+        moveRow.addView(actionButton("+ 20 m") { shiftMarker(1) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(3) })
         info.addView(moveRow)
         info.addView(actionButton("AGGIUNGI SETTORE") { addSector() }, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(5) })
         info.addView(actionButton("RIMUOVI SETTORE") {
@@ -1341,9 +1357,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             .setNegativeButton("CHIUDI", null)
             .create()
         sessions.forEach { session ->
-            val best = session.laps.minOfOrNull { it.durationMs }?.let(::formatTime) ?: "nessun giro"
+            val validLaps = session.laps.filter { it.valid }
+            val best = validLaps.minOfOrNull { it.durationMs }?.let(::formatTime) ?: "nessun giro valido"
             val title = TextView(this).apply {
-                text = "${session.displayName}\n${session.laps.size} giri · best $best"
+                text = "${session.displayName}\n${validLaps.size}/${session.laps.size} giri validi · best $best"
                 textSize = 14f
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER_VERTICAL
@@ -1380,7 +1397,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         dialog.show()
     }
 
-    private fun showLapReview(session: SavedSession, lap: RecordedLap) {
+    private fun showLapReview(session: SavedSession, lap: RecordedLap, onSessionUpdated: (SavedSession) -> Unit = {}) {
         if (lap.samples.size < 3) {
             AlertDialog.Builder(this).setTitle("Mappa giro").setMessage("Questo giro non contiene abbastanza punti GPS per la mappa.").setPositiveButton("OK", null).show()
             return
@@ -1418,6 +1435,15 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         info.addView(actionButton("SALVA COME PISTA") {
             saveLapAsTrack(session, lap, finish, sectors)
         }, LinearLayout.LayoutParams(-1, dp(44)))
+        info.addView(actionButton(if (lap.valid) "GIRO NON VALIDO" else "RIPRISTINA GIRO") {
+            val updated = session.copy(laps = session.laps.map { candidate ->
+                if (candidate.number == lap.number) candidate.copy(valid = !candidate.valid) else candidate
+            })
+            sessionStore.save(updated)
+            status.text = if (lap.valid) "Lap ${lap.number} escluso da best e statistiche" else "Lap ${lap.number} ripristinato"
+            dialog.dismiss()
+            onSessionUpdated(updated)
+        }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
         info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
         root.addView(map, LinearLayout.LayoutParams(0, -1, .58f).apply { rightMargin = dp(6) })
         root.addView(info, LinearLayout.LayoutParams(0, -1, .42f))
@@ -1500,6 +1526,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun saveLapAsTrack(session: SavedSession, lap: RecordedLap, finish: TimingLine, sectors: List<TimingLine>) {
+        if (!lap.valid) {
+            status.text = "Un giro non valido non può diventare una pista"
+            return
+        }
         val baseName = session.displayName.substringBefore(" · ").ifBlank { "Pista salvata" }
         trackStore.save(SavedTrack("track_${System.currentTimeMillis()}", baseName, System.currentTimeMillis(), lap, finish, sectors))
         status.text = "$baseName salvata come pista"
@@ -1510,7 +1540,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val allSamples = session.samples.ifEmpty { session.laps.flatMap { it.samples } }
-        val fallbackLap = session.laps.minByOrNull { it.durationMs }
+        val fallbackLap = session.laps.filter { it.valid }.minByOrNull { it.durationMs }
         val finish = session.timingLine ?: fallbackLap?.let(::lineFromLap)
         val sectors = session.sectorLines.ifEmpty { fallbackLap?.let { deriveSectors(it.samples).map { sector -> sector.line } } ?: emptyList() }
         val map = TrackMapView(this, ::handleTrackTap).apply {
@@ -1524,7 +1554,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             setPadding(dp(8), dp(8), dp(8), dp(8))
             setBackgroundColor(Color.rgb(3, 9, 14))
         }
-        val analysis = SessionAnalysisView(session) { dialog.dismiss() }
+        val analysis = SessionAnalysisView(
+            session,
+            onClose = { dialog.dismiss() },
+            onSessionUpdated = { updated -> dialog.dismiss(); showSessionAnalysis(updated) }
+        )
         if (root.orientation == LinearLayout.VERTICAL) {
             root.addView(map, LinearLayout.LayoutParams(-1, 0, .34f).apply { bottomMargin = dp(6) })
             root.addView(analysis, LinearLayout.LayoutParams(-1, 0, .66f))
@@ -1544,14 +1578,16 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     /** Full-screen timing table inspired by a race-control/F1 session monitor. */
     private inner class SessionAnalysisView(
         private val session: SavedSession,
-        private val onClose: () -> Unit
+        private val onClose: () -> Unit,
+        private val onSessionUpdated: (SavedSession) -> Unit
     ) : View(this@MainActivity) {
-        private val best = session.laps.minOfOrNull { it.durationMs }
-        private val average = session.laps.takeIf { it.isNotEmpty() }?.map { it.durationMs }?.average()?.toLong()
-        private val ideal = if (session.laps.isNotEmpty() && session.laps.all { it.sectorElapsedMs.size >= 2 }) {
-            session.laps.minOf { it.sectorElapsedMs[0] } +
-                session.laps.minOf { it.sectorElapsedMs[1] - it.sectorElapsedMs[0] } +
-                session.laps.minOf { it.durationMs - it.sectorElapsedMs[1] }
+        private val validLaps = session.laps.filter { it.valid }
+        private val best = validLaps.minOfOrNull { it.durationMs }
+        private val average = validLaps.takeIf { it.isNotEmpty() }?.map { it.durationMs }?.average()?.toLong()
+        private val ideal = if (validLaps.isNotEmpty() && validLaps.all { it.sectorElapsedMs.size >= 2 }) {
+            validLaps.minOf { it.sectorElapsedMs[0] } +
+                validLaps.minOf { it.sectorElapsedMs[1] - it.sectorElapsedMs[0] } +
+                validLaps.minOf { it.durationMs - it.sectorElapsedMs[1] }
         } else null
         private val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = dp(18).toFloat(); typeface = Typeface.DEFAULT_BOLD }
         private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(150, 190, 204); textSize = dp(10).toFloat(); typeface = Typeface.DEFAULT_BOLD }
@@ -1582,7 +1618,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val cardTop = dp(50).toFloat(); val cardBottom = dp(91).toFloat()
             val cardWidth = (width - dp(32)) / 4f
             drawMetric(canvas, pad, cardTop, cardWidth, cardBottom, "BEST LAP", best?.let(::formatTime) ?: "--:--.---", Color.rgb(24, 213, 184))
-            drawMetric(canvas, pad + cardWidth + dp(3), cardTop, cardWidth, cardBottom, "LAST LAP", session.laps.lastOrNull()?.durationMs?.let(::formatTime) ?: "--:--.---", Color.rgb(72, 205, 255))
+            drawMetric(canvas, pad + cardWidth + dp(3), cardTop, cardWidth, cardBottom, "LAST LAP", validLaps.lastOrNull()?.durationMs?.let(::formatTime) ?: "--:--.---", Color.rgb(72, 205, 255))
             drawMetric(canvas, pad + (cardWidth + dp(3)) * 2, cardTop, cardWidth, cardBottom, "MEDIA", average?.let(::formatTime) ?: "--:--.---", Color.rgb(255, 185, 64))
             drawMetric(canvas, pad + (cardWidth + dp(3)) * 3, cardTop, cardWidth, cardBottom, "IDEAL", ideal?.let(::formatTime) ?: "--:--.---", Color.rgb(174, 119, 255))
 
@@ -1602,19 +1638,19 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 val rowTop = dataTop + rowHeight * index - scroll
                 val y = rowTop + dp(16)
                 if (rowTop < dataTop - rowHeight || rowTop > height + rowHeight) return@forEachIndexed
-                val delta = best?.let { lap.durationMs - it } ?: 0
+                val delta = if (lap.valid) best?.let { lap.durationMs - it } ?: 0 else 0
                 val rowColor = when {
                     delta == 0L -> Color.rgb(24, 213, 184)
                     delta < 0L -> Color.rgb(91, 220, 135)
                     else -> Color.rgb(255, 112, 112)
                 }
                 canvas.drawLine(pad, rowTop + rowHeight, width - pad, rowTop + rowHeight, gridPaint)
-                rowPaint.color = Color.WHITE
+                rowPaint.color = if (lap.valid) Color.WHITE else Color.rgb(122, 143, 151)
                 canvas.drawText(lap.number.toString(), columns[0], y, rowPaint)
-                rowPaint.color = if (delta == 0L) Color.rgb(24, 213, 184) else Color.WHITE
+                rowPaint.color = if (!lap.valid) Color.rgb(122, 143, 151) else if (delta == 0L) Color.rgb(24, 213, 184) else Color.WHITE
                 canvas.drawText(formatTime(lap.durationMs), columns[1], y, rowPaint)
-                rowPaint.color = rowColor
-                canvas.drawText(formatDelta(delta), columns[2], y, rowPaint)
+                rowPaint.color = if (lap.valid) rowColor else Color.rgb(122, 143, 151)
+                canvas.drawText(if (lap.valid) formatDelta(delta) else "NON VALIDO", columns[2], y, rowPaint)
                 rowPaint.color = Color.rgb(255, 205, 90)
                 canvas.drawText(lap.sectorElapsedMs.getOrNull(0)?.let(::formatTime) ?: "—", columns[3], y, rowPaint)
                 canvas.drawText(lap.sectorElapsedMs.getOrNull(1)?.let(::formatTime) ?: "—", columns[4], y, rowPaint)
@@ -1652,7 +1688,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 MotionEvent.ACTION_UP -> {
                     if (!dragged && event.x > width - dp(36) && event.y < dp(50)) onClose()
                     else if (!dragged && event.x > width - dp(190) && event.y < dp(50)) {
-                        session.laps.minByOrNull { it.durationMs }?.let { lap ->
+                        session.laps.filter { it.valid }.minByOrNull { it.durationMs }?.let { lap ->
                             val finish = session.timingLine ?: lineFromLap(lap)
                             val sectors = session.sectorLines.ifEmpty { deriveSectors(lap.samples).map { it.line } }
                             saveLapAsTrack(session, lap, finish, sectors)
@@ -1662,7 +1698,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     }
                     else if (!dragged && event.y >= tableDataTop && tableRowHeight > 0f) {
                         val index = ((event.y - tableDataTop + scroll) / tableRowHeight).toInt()
-                        session.laps.getOrNull(index)?.let { showLapReview(session, it) }
+                        session.laps.getOrNull(index)?.let { showLapReview(session, it, onSessionUpdated) }
                     }
                     return true
                 }

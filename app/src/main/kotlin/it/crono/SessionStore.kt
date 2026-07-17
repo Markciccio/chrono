@@ -9,7 +9,9 @@ data class RecordedLap(
     val number: Int,
     val durationMs: Long,
     val sectorElapsedMs: List<Long>,
-    val samples: List<GpsSample> = emptyList()
+    val samples: List<GpsSample> = emptyList(),
+    /** Manual review can exclude false loop closures without deleting their GPS evidence. */
+    val valid: Boolean = true
 )
 
 data class SavedSession(
@@ -54,6 +56,7 @@ class SessionStore(context: Context) {
                     put(JSONObject().apply {
                         put("number", lap.number)
                         put("durationMs", lap.durationMs)
+                        put("valid", lap.valid)
                         put("sectors", JSONArray(lap.sectorElapsedMs))
                         put("samples", JSONArray().apply {
                             lap.samples.forEach { sample ->
@@ -99,7 +102,8 @@ class SessionStore(context: Context) {
                 lap.getInt("number"),
                 lap.getLong("durationMs"),
                 (0 until sectors.length()).map { sectors.getLong(it) },
-                samples
+                samples,
+                lap.optBoolean("valid", true)
             )
         }
         val sessionSamples = json.optJSONArray("samples")?.let { samplesJson ->
