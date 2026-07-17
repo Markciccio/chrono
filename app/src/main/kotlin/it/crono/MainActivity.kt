@@ -1926,8 +1926,12 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val geometry = geometryForSession(session, lap)
         val finish = geometry.finish
         val sectors = geometry.sectors
+        val bestLap = session.laps.filter { it.valid }.minByOrNull { it.durationMs }
         val sectorText = sectors.mapIndexed { index, line ->
-            "S${index + 1}  ${elapsedAtLine(lap.samples, line)?.let(::formatTime) ?: "—"}"
+            val currentElapsed = elapsedAtLine(lap.samples, line)
+            val bestElapsed = bestLap?.let { elapsedAtLine(it.samples, line) }
+            val delta = if (currentElapsed != null && bestElapsed != null) currentElapsed - bestElapsed else null
+            "S${index + 1}  ${currentElapsed?.let(::formatTime) ?: "—"}  ·  Δ ${delta?.let(::formatDelta) ?: "—"}"
         }.joinToString("\n")
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -1943,6 +1947,18 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             setSpeedMarkers(speedMarkersForLap(lap))
             postDelayed({ fitEntireTrack() }, 500)
         }
+        val mapFrame = FrameLayout(this)
+        mapFrame.addView(map, FrameLayout.LayoutParams(-1, -1))
+        mapFrame.addView(TextView(this).apply {
+            text = "SETTORI RILEVATI\n$sectorText"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.rgb(235, 247, 250))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = hudPanel(Color.argb(225, 7, 24, 33), Color.rgb(72, 205, 255), 1)
+        }, FrameLayout.LayoutParams(dp(220), -2, Gravity.BOTTOM or Gravity.END).apply {
+            setMargins(dp(8), dp(8), dp(10), dp(10))
+        })
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
@@ -1952,10 +1968,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             text = "LAP ${lap.number}\n${formatTime(lap.durationMs)}"
             textSize = 24f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
         })
-        info.addView(TextView(this).apply {
-            text = "\nSETTORI RILEVATI\n${sectorText.ifBlank { "Nessun intermedio disponibile" }}"
-            textSize = 16f; setTextColor(Color.rgb(184, 223, 235))
-        }, LinearLayout.LayoutParams(-1, 0, 1f))
+        info.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
         info.addView(actionButton("ANALISI INGEGNERE") {
             showEngineerAnalysis(session, lap, sectors)
         }, LinearLayout.LayoutParams(-1, dp(44)))
@@ -1975,7 +1988,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             saveLapAsTrack(session, lap, finish, sectors)
         }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
         info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { topMargin = dp(6); gravity = Gravity.END })
-        root.addView(map, LinearLayout.LayoutParams(0, -1, .72f).apply { rightMargin = dp(6) })
+        root.addView(mapFrame, LinearLayout.LayoutParams(0, -1, .72f).apply { rightMargin = dp(6) })
         root.addView(info, LinearLayout.LayoutParams(0, -1, .28f))
         dialog.setContentView(root)
         dialog.show()
