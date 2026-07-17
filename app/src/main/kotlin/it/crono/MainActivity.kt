@@ -1932,6 +1932,15 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             setSectors(sectors)
             postDelayed({ fitEntireTrack() }, 500)
         }
+        val mapFrame = FrameLayout(this).apply {
+            addView(map, FrameLayout.LayoutParams(-1, -1))
+            addView(
+                actionButton("ANALISI SESSIONE") { showSessionEngineerAnalysis(session) },
+                FrameLayout.LayoutParams(dp(178), dp(42), Gravity.BOTTOM or Gravity.START).apply {
+                    leftMargin = dp(10); bottomMargin = dp(10)
+                }
+            )
+        }
         val root = LinearLayout(this).apply {
             orientation = if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
             setPadding(dp(8), dp(8), dp(8), dp(8))
@@ -1943,10 +1952,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             onSessionUpdated = { updated -> dialog.dismiss(); showSessionAnalysis(updated) }
         )
         if (root.orientation == LinearLayout.VERTICAL) {
-            root.addView(map, LinearLayout.LayoutParams(-1, 0, .34f).apply { bottomMargin = dp(6) })
+            root.addView(mapFrame, LinearLayout.LayoutParams(-1, 0, .34f).apply { bottomMargin = dp(6) })
             root.addView(analysis, LinearLayout.LayoutParams(-1, 0, .66f))
         } else {
-            root.addView(map, LinearLayout.LayoutParams(0, -1, .34f).apply { rightMargin = dp(6) })
+            root.addView(mapFrame, LinearLayout.LayoutParams(0, -1, .34f).apply { rightMargin = dp(6) })
             root.addView(analysis, LinearLayout.LayoutParams(0, -1, .66f))
         }
         dialog.setContentView(root)
@@ -1955,6 +1964,107 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             setLayout(-1, -1)
             setBackgroundDrawable(ColorDrawable(Color.rgb(3, 9, 14)))
             decorView.systemUiVisibility = window.decorView.systemUiVisibility
+        }
+    }
+
+    /** A cautious whole-session report: it turns the recorded GPS facts into actionable
+     * priorities, while marking tyre/traffic conclusions as indications rather than certainties. */
+    private fun showSessionEngineerAnalysis(session: SavedSession) {
+        val validLaps = session.laps.filter { it.valid }.sortedBy { it.number }
+        if (validLaps.isEmpty()) {
+            AlertDialog.Builder(this).setTitle("Analisi sessione").setMessage("Non ci sono giri validi da analizzare.").setPositiveButton("OK", null).show()
+            return
+        }
+        val best = validLaps.minByOrNull { it.durationMs } ?: return
+        val sectors = geometryForSession(session, best).sectors.take(2)
+        val report = TextView(this).apply {
+            text = sessionEngineerReport(session, validLaps, best, sectors)
+            textSize = 16f
+            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
+            setTextColor(Color.rgb(225, 240, 244))
+            setPadding(dp(22), dp(20), dp(22), dp(34))
+            setLineSpacing(dp(5).toFloat(), 1f)
+        }
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.rgb(3, 9, 14)) }
+        root.addView(ScrollView(this).apply { addView(report) }, FrameLayout.LayoutParams(-1, -1))
+        root.addView(actionButton("CHIUDI") { dialog.dismiss() }, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.TOP or Gravity.END).apply { topMargin = dp(14); rightMargin = dp(14) })
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.apply {
+            setLayout(-1, -1)
+            setBackgroundDrawable(ColorDrawable(Color.rgb(3, 9, 14)))
+            decorView.systemUiVisibility = window.decorView.systemUiVisibility
+        }
+    }
+
+    private fun sessionEngineerReport(session: SavedSession, laps: List<RecordedLap>, best: RecordedLap, sectors: List<TimingLine>): String {
+        val durations = laps.map { it.durationMs }
+        val average = durations.average().toLong()
+        val spread = (durations.maxOrNull() ?: average) - (durations.minOrNull() ?: average)
+        val standardDeviation = kotlin.math.sqrt(durations.map { (it - average).toDouble() * (it - average) }.average()).toLong()
+        val splitRows = laps.map { lap -> lap to segmentTimes(lap, sectors).map { it ?: 0L } }
+        val segmentCount = splitRows.maxOfOrNull { it.second.size } ?: 0
+        val segmentLabels = List(segmentCount) { index ->
+            when {
+                index == 0 -> "SETTORE 1"
+                index == 1 -> "SETTORE 2"
+                else -> "TRATTO FINALE"
+            }
+        }
+        val segmentAverages = List(segmentCount) { index -> splitRows.mapNotNull { it.second.getOrNull(index)?.takeIf { value -> value > 0 } }.average().toLong() }
+        val segmentBests = List(segmentCount) { index ->
+            splitRows.mapNotNull { (lap, splits) -> splits.getOrNull(index)?.takeIf { it > 0 }?.let { lap to it } }.minByOrNull { it.second }
+        }
+        val ideal = segmentBests.mapNotNull { it?.second }.sum()
+        val firstGroup = laps.take(maxOf(1, laps.size / 3)).map { it.durationMs }.average().toLong()
+        val lastGroup = laps.takeLast(maxOf(1, laps.size / 3)).map { it.durationMs }.average().toLong()
+        val phaseDelta = lastGroup - firstGroup
+        val worstIndex = segmentAverages.indices.maxByOrNull { segmentAverages[it] - (segmentBests[it]?.second ?: segmentAverages[it]) }
+        val strengthIndex = segmentAverages.indices.minByOrNull { segmentAverages[it] - (segmentBests[it]?.second ?: segmentAverages[it]) }
+        val summaries = laps.associateWith(::speedSummary)
+        val bestSpeed = summaries[best] ?: speedSummary(best)
+        val averageVmax = summaries.values.map { it.maxKmh }.average().toInt()
+        val brakingRange = summaries.values.map { it.brakingMinKmh }.let { (it.maxOrNull() ?: 0) - (it.minOrNull() ?: 0) }
+        val exitRange = summaries.values.map { it.accelerationMaxKmh }.let { (it.maxOrNull() ?: 0) - (it.minOrNull() ?: 0) }
+        return buildString {
+            append("ANALISI INGEGNERE — SESSIONE\n")
+            append("${session.displayName.uppercase(Locale.ITALIAN)}\n\n")
+            append("RITMO GENERALE\n")
+            append("Giri validi: ${laps.size} su ${session.laps.size}\n")
+            append("Best lap: ${formatTime(best.durationMs)}  (lap ${best.number})\n")
+            append("Media: ${formatTime(average)}  · dispersione: ${formatTime(spread)}\n")
+            append("Costanza: deviazione media ${formatTime(standardDeviation)}\n")
+            if (ideal > 0) append("Ideal lap: ${formatTime(ideal)}  · potenziale ${formatDelta(ideal - best.durationMs)}\n")
+            append("\nEVOLUZIONE SESSIONE\n")
+            when {
+                phaseDelta <= -300L -> append("La parte finale è più rapida di ${formatTime(-phaseDelta)} rispetto all'inizio: andamento compatibile con maggiore fiducia, pista o gomme in finestra.\n")
+                phaseDelta >= 300L -> append("La parte finale è più lenta di ${formatTime(phaseDelta)} rispetto all'inizio: possibile degrado gomme, traffico o calo di costanza; confronta le condizioni in pista.\n")
+                else -> append("Il ritmo tra inizio e fine resta stabile (variazione ${formatDelta(phaseDelta)}): buona ripetibilità della sessione.\n")
+            }
+            append("\nSETTORI E AREE CHIAVE\n")
+            segmentLabels.forEachIndexed { index, label ->
+                val record = segmentBests[index]
+                if (record != null) {
+                    val averageGap = segmentAverages[index] - record.second
+                    append("$label  best ${formatTime(record.second)} (lap ${record.first.number}) · media ${formatTime(segmentAverages[index])} · margine ${formatDelta(averageGap)}\n")
+                }
+            }
+            worstIndex?.let { index ->
+                val gap = segmentAverages[index] - (segmentBests[index]?.second ?: segmentAverages[index])
+                append("\nPRIORITÀ: ${segmentLabels[index]} concentra il maggiore margine medio (${formatDelta(gap)}). Qui gli errori sono più ricorrenti: rivedi punto di frenata, rilascio e uscita curva.\n")
+            }
+            strengthIndex?.let { index ->
+                append("PUNTO FORTE: ${segmentLabels[index]} è il tratto più vicino al suo potenziale. Mantieni questa sequenza di guida come riferimento.\n")
+            }
+            append("\nVELOCITÀ E GUIDA\n")
+            append("Best lap: V max ${bestSpeed.maxKmh} km/h · minima frenata ${bestSpeed.brakingMinKmh} km/h · uscita/accelerazione ${bestSpeed.accelerationMaxKmh} km/h\n")
+            append("V max media sessione: $averageVmax km/h\n")
+            append("Variabilità minime di frenata: $brakingRange km/h · variabilità uscite: $exitRange km/h\n")
+            if (brakingRange > 7 || exitRange > 7) append("Le velocità nei punti chiave variano molto: la ripetibilità di frenata e apertura gas è la prima leva per rendere i giri più costanti.\n")
+            else append("Le velocità nei punti chiave sono abbastanza ripetibili: il guadagno principale è nella precisione delle traiettorie e nell'unione dei migliori settori.\n")
+            append("\nNOTA METODO\nLe indicazioni derivano da GPS e velocità del telefono: utili per individuare tendenze e priorità, non sostituiscono sensori ruota, IMU o dati telemetrici professionali.\n")
         }
     }
 
