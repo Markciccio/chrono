@@ -2958,10 +2958,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawRect(0f, 0f, dp(6).toFloat(), dp(28).toFloat(), accent)
             labelPaint.color = Color.rgb(218, 229, 235); labelPaint.textAlign = Paint.Align.LEFT
             canvas.drawText("PIT ENGINEER  //  LIVE TIMING", pad + dp(8), dp(20).toFloat(), labelPaint)
-            labelPaint.textAlign = Paint.Align.RIGHT; labelPaint.textSize = timingTextSize(10)
-            canvas.drawText("LAP", width - pad - dp(34), dp(13).toFloat(), labelPaint)
-            primaryPaint.color = Color.WHITE; primaryPaint.textAlign = Paint.Align.RIGHT; primaryPaint.textSize = timingTextSize(28)
-            canvas.drawText("$lapNumber", width - pad, dp(31).toFloat(), primaryPaint)
             if (recording) {
                 labelPaint.color = Color.rgb(255, 82, 92); labelPaint.textAlign = Paint.Align.CENTER
                 canvas.drawText("● REC", width * .66f, dp(20).toFloat(), labelPaint)
@@ -3003,10 +2999,30 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawRect(mid + gap, cardTop, mid + gap + dp(5), cardBottom, Paint().apply { color = green })
             labelPaint.textAlign = Paint.Align.CENTER; labelPaint.color = Color.rgb(112, 157, 174)
             lastPaint.textSize = timingTextSize(22); lastPaint.color = Color.rgb(238, 245, 247)
-            canvas.drawText("LAST LAP", (pad + mid - gap) / 2f, cardTop + dp(17), labelPaint)
-            canvas.drawText(last?.let(::formatTime) ?: "--:--.---", (pad + mid - gap) / 2f, cardBottom - dp(10), lastPaint)
-            canvas.drawText("CURRENT LAP", (mid + gap + width - pad) / 2f, cardTop + dp(17), labelPaint)
-            canvas.drawText(elapsed?.let(::formatTime) ?: "--:--.---", (mid + gap + width - pad) / 2f, cardBottom - dp(10), lastPaint)
+            val lastCenter = (pad + mid - gap) / 2f
+            val currentCenter = (mid + gap + width - pad) / 2f
+            canvas.drawText("LAST LAP", lastCenter, cardTop + dp(17), labelPaint)
+            val lastValue = last
+            val bestValue = best
+            val lastText = lastValue?.let(::formatTime) ?: "--:--.---"
+            val lastDelta = if (lastValue != null && bestValue != null) lastValue - bestValue else null
+            lastPaint.textAlign = Paint.Align.CENTER
+            canvas.drawText(lastText, lastCenter - dp(13), cardBottom - dp(10), lastPaint)
+            labelPaint.textAlign = Paint.Align.LEFT
+            labelPaint.textSize = timingTextSize(11)
+            labelPaint.color = when { lastDelta == null -> Color.rgb(145, 164, 174); lastDelta == 0L -> green; else -> red }
+            canvas.drawText(lastDelta?.let(::formatDelta) ?: "", lastCenter + lastPaint.measureText(lastText) / 2f - dp(7), cardBottom - dp(11), labelPaint)
+            labelPaint.textAlign = Paint.Align.CENTER
+            labelPaint.textSize = timingTextSize(17)
+            labelPaint.color = Color.rgb(112, 157, 174)
+            canvas.drawText("CURRENT LAP", currentCenter, cardTop + dp(17), labelPaint)
+            val currentText = elapsed?.let(::formatTime) ?: "--:--.---"
+            lastPaint.textSize = timingTextSize(22)
+            canvas.drawText(currentText, currentCenter - dp(10), cardBottom - dp(10), lastPaint)
+            labelPaint.textAlign = Paint.Align.LEFT
+            labelPaint.textSize = timingTextSize(13)
+            labelPaint.color = Color.rgb(72, 205, 255)
+            canvas.drawText("$lapNumber", currentCenter + lastPaint.measureText(currentText) / 2f - dp(2), cardBottom - dp(12), labelPaint)
             drawClassicFooter(canvas)
             canvas.drawRoundRect(dp(2).toFloat(), dp(2).toFloat(), width - dp(2).toFloat(), height - dp(2).toFloat(), dp(9).toFloat(), dp(9).toFloat(), hudStrokePaint)
             return true
