@@ -1458,6 +1458,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val geometry = geometryForSession(session, lap)
         val finish = geometry.finish
         val sectors = geometry.sectors
+        val sectorText = sectors.mapIndexed { index, line ->
+            "S${index + 1}  ${elapsedAtLine(lap.samples, line)?.let(::formatTime) ?: "—"}"
+        }.joinToString("\n")
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val root = LinearLayout(this).apply {
@@ -1482,12 +1485,15 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             textSize = 24f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
         })
         info.addView(TextView(this).apply {
-            text = "\nF = fine frenata\nA = fine accelerazione\n\nVelocità e intermedi sono indicati direttamente sulla mappa."
+            text = "\nSETTORI RILEVATI\n${sectorText.ifBlank { "Nessun intermedio disponibile" }}"
             textSize = 16f; setTextColor(Color.rgb(184, 223, 235))
         }, LinearLayout.LayoutParams(-1, 0, 1f))
         info.addView(actionButton("SALVA COME PISTA") {
             saveLapAsTrack(session, lap, finish, sectors)
         }, LinearLayout.LayoutParams(-1, dp(44)))
+        info.addView(actionButton("ANALISI INGEGNERE") {
+            showEngineerAnalysis(session, lap, sectors)
+        }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
         info.addView(actionButton(if (lap.valid) "GIRO NON VALIDO" else "RIPRISTINA GIRO") {
             val updated = session.copy(laps = session.laps.map { candidate ->
                 if (candidate.number == lap.number) candidate.copy(valid = !candidate.valid) else candidate
@@ -1509,6 +1515,106 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
     }
 
+    /** Offline lap-coach comparison: uses only GPS position, speed and timing samples, so it
+     * remains honest about what a phone can observe while still isolating useful driving areas. */
+    private fun showEngineerAnalysis(session: SavedSession, lap: RecordedLap, sectors: List<TimingLine>) {
+        val reference = session.laps.filter { it.valid }.minByOrNull { it.durationMs }
+        if (reference == null || reference.samples.size < 3) {
+            AlertDialog.Builder(this).setTitle("Analisi ingegnere").setMessage("Serve almeno un giro valido di riferimento.").setPositiveButton("OK", null).show()
+            return
+        }
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val root = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(8), dp(8), dp(8), dp(8)); setBackgroundColor(Color.rgb(3, 9, 14)) }
+        val map = TrackMapView(this) { }.apply {
+            setTrack(lap.samples.map { TrackPoint(it.lat, it.lon) })
+            setTimingLine(geometryForSession(session, lap).finish)
+            setSectors(sectors)
+            setSpeedMarkers(speedMarkersForLap(lap))
+            postDelayed({ fitEntireTrack() }, 500)
+        }
+        val report = TextView(this).apply {
+            text = engineerReport(lap, reference, sectors)
+            textSize = 16f
+            setTextColor(Color.rgb(225, 240, 244))
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setLineSpacing(dp(5).toFloat(), 1f)
+        }
+        val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(7, 24, 33)) }
+        right.addView(ScrollView(this).apply { addView(report) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        right.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(44)).apply { setMargins(dp(12), dp(4), dp(12), dp(12)) })
+        root.addView(map, LinearLayout.LayoutParams(0, -1, .57f).apply { rightMargin = dp(6) })
+        root.addView(right, LinearLayout.LayoutParams(0, -1, .43f))
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.apply { setLayout(-1, -1); setBackgroundDrawable(ColorDrawable(Color.rgb(3, 9, 14))); decorView.systemUiVisibility = window.decorView.systemUiVisibility }
+    }
+
+    private fun engineerReport(lap: RecordedLap, reference: RecordedLap, sectors: List<TimingLine>): String {
+        val totalDelta = lap.durationMs - reference.durationMs
+        val targetSplits = segmentTimes(lap, sectors)
+        val referenceSplits = segmentTimes(reference, sectors)
+        val splitDeltas = targetSplits.indices.mapNotNull { index ->
+            val target = targetSplits[index] ?: return@mapNotNull null
+            val best = referenceSplits.getOrNull(index) ?: return@mapNotNull null
+            index to (target - best)
+        }
+        val lost = splitDeltas.maxByOrNull { it.second }
+        val gained = splitDeltas.minByOrNull { it.second }
+        val targetSummary = speedSummary(lap)
+        val referenceSummary = speedSummary(reference)
+        val slowMarker = speedMarkersForLap(lap).filter { it.kind == "braking" }.minByOrNull { it.speedKmh }
+        val slowReference = slowMarker?.let { marker -> nearestSpeed(reference, marker.point) }
+        val fastMarker = speedMarkersForLap(lap).filter { it.kind == "acceleration" }.maxByOrNull { it.speedKmh }
+        val fastReference = fastMarker?.let { marker -> nearestSpeed(reference, marker.point) }
+        return buildString {
+            append("ANALISI INGEGNERE\n\n")
+            append("LAP ${lap.number}: ${formatTime(lap.durationMs)}\n")
+            append("Best lap: ${formatTime(reference.durationMs)}\n")
+            append("DELTA TOTALE  ${formatDelta(totalDelta)}\n\n")
+            append("SETTORI\n")
+            splitDeltas.forEach { (index, delta) -> append("S${index + 1}  ${formatDelta(delta)}\n") }
+            lost?.takeIf { it.second > 0 }?.let { (index, delta) ->
+                append("\nAREA DA MIGLIORARE\nPerdita maggiore nel tratto S${index + 1}: ${formatDelta(delta)} rispetto al best.\n")
+            }
+            gained?.takeIf { it.second < 0 }?.let { (index, delta) ->
+                append("\nPUNTO FORTE\nNel tratto S${index + 1} guadagni ${formatDelta(-delta)} sul best.\n")
+            }
+            append("\nVELOCITÀ\nV max ${targetSummary.maxKmh} km/h (best ${referenceSummary.maxKmh})\n")
+            slowMarker?.let { marker ->
+                append("Percorrenza lenta: ${marker.speedKmh} km/h")
+                slowReference?.let { append(" · best ${it} km/h") }
+                append("\n")
+            }
+            fastMarker?.let { marker ->
+                append("Uscita più veloce: ${marker.speedKmh} km/h")
+                fastReference?.let { append(" · best ${it} km/h") }
+                append("\n")
+            }
+            if (totalDelta == 0L) append("\nGiro di riferimento: usa i marker MIN/MAX sulla mappa per confermare frenate e uscite.")
+        }
+    }
+
+    private fun segmentTimes(lap: RecordedLap, sectors: List<TimingLine>): List<Long?> {
+        if (sectors.isEmpty()) return emptyList()
+        val elapsed = sectors.map { elapsedAtLine(lap.samples, it) }
+        val result = mutableListOf<Long?>()
+        var previous = 0L
+        elapsed.forEach { value ->
+            if (value == null) result += null else {
+                result += value - previous
+                previous = value
+            }
+        }
+        val finalStart = elapsed.lastOrNull()
+        result += finalStart?.let { lap.durationMs - it }
+        return result
+    }
+
+    private fun nearestSpeed(lap: RecordedLap, point: TrackPoint): Int? = lap.samples.minByOrNull {
+        Geo.distanceM(it.lat, it.lon, point.lat, point.lon)
+    }?.speedMps?.times(3.6f)?.toInt()
+
     private data class LapSpeedSummary(val maxKmh: Int, val minKmh: Int, val brakingMinKmh: Int, val accelerationMaxKmh: Int)
 
     /**
@@ -1527,15 +1633,15 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
         data class Candidate(val index: Int, val braking: Boolean)
         val candidates = mutableListOf<Candidate>()
-        val radius = 3
+        val radius = 2
         for (index in radius until smooth.size - radius) {
             val before = smooth.subList(index - radius, index)
             val after = smooth.subList(index + 1, index + radius + 1)
             val value = smooth[index]
             val isMinimum = value <= before.minOrNull()!! && value <= after.minOrNull()!! &&
-                before.maxOrNull()!! - value >= 4f && after.maxOrNull()!! - value >= 4f
+                before.maxOrNull()!! - value >= 2f && after.maxOrNull()!! - value >= 2f
             val isMaximum = value >= before.maxOrNull()!! && value >= after.maxOrNull()!! &&
-                value - before.minOrNull()!! >= 4f && value - after.minOrNull()!! >= 4f
+                value - before.minOrNull()!! >= 2f && value - after.minOrNull()!! >= 2f
             if (isMinimum) candidates += Candidate(index, braking = true)
             if (isMaximum) candidates += Candidate(index, braking = false)
         }
@@ -1552,7 +1658,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 if (replace) selected[selected.lastIndex] = candidate
             }
         }
-        return selected.map { candidate ->
+        // Always show at least a meaningful slow point and a meaningful fast point, even if
+        // the phone signal is too smooth to form a textbook local extremum.
+        if (selected.none { it.braking }) selected += Candidate(smooth.indices.minByOrNull { smooth[it] }!!, braking = true)
+        if (selected.none { !it.braking }) selected += Candidate(smooth.indices.maxByOrNull { smooth[it] }!!, braking = false)
+        return selected.distinctBy { it.index to it.braking }.sortedBy { it.index }.take(10).map { candidate ->
             SpeedMarker(
                 TrackPoint(samples[candidate.index].lat, samples[candidate.index].lon),
                 smooth[candidate.index].toInt(),
