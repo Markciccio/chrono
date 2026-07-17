@@ -34,6 +34,10 @@ class TrackStore(context: Context) {
         File(directory, "${track.id}.json").writeText(json.toString())
     }
 
+    fun delete(track: SavedTrack) {
+        File(directory, "${track.id}.json").delete()
+    }
+
     fun list(): List<SavedTrack> = directory.listFiles { file -> file.extension == "json" }
         ?.mapNotNull { runCatching { parse(JSONObject(it.readText())) }.getOrNull() }
         ?.sortedBy { it.name }

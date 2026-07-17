@@ -198,7 +198,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val firstControlRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val secondControlRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val thirdControlRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun controlParams(weight: Float) = LinearLayout.LayoutParams(0, dp(37), weight).apply { setMargins(dp(2), dp(2), dp(2), 0) }
         fun control(row: LinearLayout, label: String, weight: Float = 1f, action: () -> Unit) {
             row.addView(actionButton(label, action), controlParams(weight))
@@ -207,21 +206,18 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         firstControlRow.addView(startButton, controlParams(1f))
         pauseButton = actionButton("PAUSA") { togglePause() }
         firstControlRow.addView(pauseButton, controlParams(1f))
-        control(secondControlRow, "SPOSTA TRAGUARDO", 1f) { setTimingLineAtCurrentFix() }
-        control(secondControlRow, "SPOSTA SETTORE", 1f) { showMoveSectorMenu() }
         testButton = actionButton("TEST GPS") { toggleSimulation() }
-        thirdControlRow.addView(testButton, controlParams(.5f))
+        secondControlRow.addView(testButton, controlParams(.5f))
         lockButton = actionButton("BLOCCA") { lockScreen() }
-        thirdControlRow.addView(lockButton, controlParams(.5f))
+        secondControlRow.addView(lockButton, controlParams(.5f))
         controls.addView(firstControlRow, LinearLayout.LayoutParams(-1, dp(39)))
         controls.addView(secondControlRow, LinearLayout.LayoutParams(-1, dp(39)))
-        controls.addView(thirdControlRow, LinearLayout.LayoutParams(-1, dp(39)))
 
         val content = LinearLayout(this).apply { orientation = if (isPortrait) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL }
         val mapColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(trackMap, LinearLayout.LayoutParams(-1, 0, 1f))
-            addView(controls, LinearLayout.LayoutParams(-1, dp(119)))
+            addView(controls, LinearLayout.LayoutParams(-1, dp(80)))
         }
         if (isPortrait) {
             content.addView(mapColumn, LinearLayout.LayoutParams(-1, 0, .39f).apply { setMargins(0, dp(6), 0, dp(4)) })
@@ -312,6 +308,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             menu.add("Frequenza avvisi vocali")
             menu.add("Dimensione live timing")
             menu.add("Orientamento schermo")
+            menu.add("Elenco piste")
             menu.add("Inquadra tutta la traccia")
             setOnMenuItemClickListener { item ->
                 when (item.title.toString()) {
@@ -324,6 +321,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     "Frequenza avvisi vocali" -> showVoiceFrequencyMenu()
                     "Dimensione live timing" -> showLiveTimingSizeMenu()
                     "Orientamento schermo" -> showScreenOrientationMenu()
+                    "Elenco piste" -> showTrackList()
                     "Inquadra tutta la traccia" -> {
                         trackMap.fitEntireTrack()
                         status.text = "Mappa adattata alla traccia"
@@ -334,6 +332,142 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             show()
         }
     }
+
+    /** Library of circuits obtained from previous sessions. Editing is intentionally only
+     * available while stopped, so a pocket tap can never change a live timing line. */
+    private fun showTrackList() {
+        val tracks = trackStore.list()
+        if (tracks.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Elenco piste")
+                .setMessage("Non hai ancora piste salvate. Apri una sessione e premi + PISTA sul giro migliore.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), dp(8), dp(10), dp(8)) }
+        val scroll = ScrollView(this).apply { addView(list) }
+        val dialog = AlertDialog.Builder(this).setTitle("Elenco piste").setView(scroll).setNegativeButton("CHIUDI", null).create()
+        tracks.forEach { track ->
+            val row = Button(this).apply {
+                text = "${track.name}\n${formatTime(track.lap.durationMs)} · ${track.sectors.size} settori"
+                textSize = 14f
+                gravity = Gravity.CENTER_VERTICAL
+                setTextColor(Color.WHITE)
+                background = hudPanel(Color.rgb(7, 24, 33), Color.rgb(28, 148, 190), 1)
+                setOnClickListener { dialog.dismiss(); showTrackEditor(track) }
+            }
+            list.addView(row, LinearLayout.LayoutParams(-1, dp(58)).apply { setMargins(0, dp(3), 0, dp(3)) })
+        }
+        dialog.show()
+    }
+
+    /**
+     * Edits markers by walking them along the recorded centreline.  This avoids having to
+     * drag a thin GPS line precisely and makes the result deterministic even on a phone.
+     */
+    private fun showTrackEditor(track: SavedTrack) {
+        if (running) {
+            status.text = "Ferma la registrazione prima di modificare una pista"
+            return
+        }
+        val points = track.lap.samples.map { TrackPoint(it.lat, it.lon) }
+        if (points.size < 3) return
+        var finishIndex = Geo.nearestRouteIndex(lineCenter(track.finishLine), points)
+        val sectorIndexes = track.sectors.map { Geo.nearestRouteIndex(lineCenter(it), points) }.toMutableList()
+        var selection = -1 // -1 finish; otherwise index in sectorIndexes
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val root = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(8), dp(8), dp(8), dp(8)); setBackgroundColor(Color.rgb(3, 9, 14)) }
+        lateinit var map: TrackMapView
+        lateinit var selectedLabel: TextView
+
+        fun orderedIndexes() = sectorIndexes.sortedBy { (it - finishIndex + points.size) % points.size }
+        fun markerLine(index: Int): TimingLine {
+            val before = points[(index - 1 + points.size) % points.size]
+            val after = points[(index + 1) % points.size]
+            return Geo.timingLine(points[index], Geo.headingDeg(before, after))
+        }
+        fun selectedText() = if (selection == -1) "TRAGUARDO" else "SETTORE ${selection + 1}"
+        fun redraw() {
+            val ordered = orderedIndexes()
+            map.setTrack(points)
+            map.setTimingLine(markerLine(finishIndex))
+            map.setSectors(ordered.map(::markerLine))
+            selectedLabel.text = "${selectedText()} · usa − / + per spostarlo lungo la traccia"
+        }
+        fun chooseMarker() {
+            val choices = mutableListOf("TRAGUARDO")
+            sectorIndexes.indices.forEach { choices += "SETTORE ${it + 1}" }
+            AlertDialog.Builder(this).setTitle("Seleziona elemento da spostare")
+                .setItems(choices.toTypedArray()) { _, which -> selection = which - 1; redraw() }.show()
+        }
+        fun shiftMarker(delta: Int) {
+            if (selection == -1) finishIndex = (finishIndex + delta + points.size) % points.size
+            else sectorIndexes[selection] = (sectorIndexes[selection] + delta + points.size) % points.size
+            redraw()
+        }
+        fun addSector() {
+            val markers = (sectorIndexes + finishIndex).sorted()
+            if (markers.size == 1) {
+                sectorIndexes += (finishIndex + points.size / 2) % points.size
+                selection = sectorIndexes.lastIndex
+                redraw()
+                return
+            }
+            val gapStart = markers.indices.maxByOrNull { i ->
+                val next = markers[(i + 1) % markers.size]
+                (next - markers[i] + points.size) % points.size
+            } ?: 0
+            val start = markers[gapStart]
+            val next = markers[(gapStart + 1) % markers.size]
+            val gap = (next - start + points.size) % points.size
+            sectorIndexes += (start + gap / 2) % points.size
+            selection = sectorIndexes.lastIndex
+            redraw()
+        }
+        map = TrackMapView(this) { tapped ->
+            val index = Geo.nearestRouteIndex(tapped, points)
+            if (selection == -1) finishIndex = index else sectorIndexes[selection] = index
+            redraw()
+        }.apply { setTrack(points); postDelayed({ fitEntireTrack() }, 400) }
+        val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(12), dp(14), dp(12)); setBackgroundColor(Color.rgb(7, 24, 33)) }
+        info.addView(TextView(this).apply { text = track.name.uppercase(Locale.ITALIAN); textSize = 21f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) })
+        selectedLabel = TextView(this).apply { textSize = 14f; setTextColor(Color.rgb(184, 223, 235)); setPadding(0, dp(14), 0, dp(10)) }
+        info.addView(selectedLabel)
+        info.addView(actionButton("SELEZIONA") { chooseMarker() }, LinearLayout.LayoutParams(-1, dp(42)))
+        val moveRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        moveRow.addView(actionButton("−") { shiftMarker(-3) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(3) })
+        moveRow.addView(actionButton("+") { shiftMarker(3) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(3) })
+        info.addView(moveRow)
+        info.addView(actionButton("AGGIUNGI SETTORE") { addSector() }, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(5) })
+        info.addView(actionButton("RIMUOVI SETTORE") {
+            if (selection >= 0) { sectorIndexes.removeAt(selection); selection = -1; redraw() }
+            else status.text = "Seleziona un settore da rimuovere"
+        }, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(5) })
+        info.addView(actionButton("SALVA MODIFICHE") {
+            val saved = track.copy(finishLine = markerLine(finishIndex), sectors = orderedIndexes().map(::markerLine))
+            trackStore.save(saved)
+            if (activeSavedTrack?.id == saved.id) { activeSavedTrack = saved; configureSavedTrack(saved) }
+            status.text = "${saved.name}: traguardo e settori aggiornati"
+            speak("Pista aggiornata", flush = true)
+            dialog.dismiss()
+        }, LinearLayout.LayoutParams(-1, dp(42)).apply { topMargin = dp(9) })
+        info.addView(actionButton("ELIMINA PISTA") {
+            AlertDialog.Builder(this).setTitle("Eliminare pista?").setMessage(track.name)
+                .setNegativeButton("ANNULLA", null).setPositiveButton("ELIMINA") { _, _ ->
+                    trackStore.delete(track); if (activeSavedTrack?.id == track.id) useAutomaticFinish(); dialog.dismiss()
+                }.show()
+        }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(5) })
+        root.addView(map, LinearLayout.LayoutParams(0, -1, .62f).apply { rightMargin = dp(6) })
+        root.addView(info, LinearLayout.LayoutParams(0, -1, .38f))
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.apply { setLayout(-1, -1); setBackgroundDrawable(ColorDrawable(Color.rgb(3, 9, 14))); decorView.systemUiVisibility = window.decorView.systemUiVisibility }
+        redraw()
+    }
+
+    private fun lineCenter(line: TimingLine) = TrackPoint((line.pointA.lat + line.pointB.lat) / 2.0, (line.pointA.lon + line.pointB.lon) / 2.0)
 
     private fun showLiveTimingSizeMenu() {
         val choices = LiveTimingSize.entries.map { it.label }.toTypedArray()
@@ -543,21 +677,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun handleTrackTap(tapped: TrackPoint) {
-        val nearestSector = timing.sectors.indices.minByOrNull { index ->
-            val line = timing.sectors[index]
-            Geo.distanceM(tapped.lat, tapped.lon, (line.pointA.lat + line.pointB.lat) / 2.0, (line.pointA.lon + line.pointB.lon) / 2.0)
-        }
-        val sectorDistance = nearestSector?.let { index ->
-            val line = timing.sectors[index]
-            Geo.distanceM(tapped.lat, tapped.lon, (line.pointA.lat + line.pointB.lat) / 2.0, (line.pointA.lon + line.pointB.lon) / 2.0)
-        } ?: Double.MAX_VALUE
-        if (nearestSector != null && sectorDistance <= 50.0) {
-            moveSector(nearestSector + 1, tapped)
-        } else if (!running) {
-            setTimingLineAtMapPoint(tapped)
-        } else {
-            status.text = "Tocca vicino a un intermedio per spostarlo"
-        }
+        // The live map is deliberately read-only: timing geometry belongs to the saved-track
+        // editor, not to accidental taps while the phone is in a pocket or on a kart.
+        status.text = if (running) "Mappa bloccata durante la registrazione" else "Modifica traguardo e settori da ☰ · Elenco piste"
     }
 
     private fun showMoveSectorMenu() {
