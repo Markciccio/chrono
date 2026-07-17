@@ -2602,7 +2602,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun spokenDelta(ms: Long): String {
-        val state = if (ms < 0) "Sei avanti di" else "Sei in ritardo di"
+        val state = if (ms < 0) "Delta negativo di" else "Delta positivo di"
         return "$state ${spokenStopwatch(abs(ms))}"
     }
 
@@ -2614,7 +2614,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
     /** Compact sector call with a natural, unambiguous delta. */
     private fun spokenSectorDelta(ms: Long): String {
-        val state = if (ms < 0) "sei avanti di" else "sei in ritardo di"
+        val state = if (ms < 0) "delta negativo di" else "delta positivo di"
         val amount = "%.2f".format(Locale.US, abs(ms) / 1_000.0)
         return "$state $amount secondi"
     }
@@ -2643,30 +2643,30 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val amount = spokenStopwatch(abs(ms))
         val variants = if (ms < 0) listOf(
             "Delta negativo di $amount",
-            "Guadagno di $amount",
-            "Stai recuperando $amount",
-            "Best lap battuto di $amount",
-            "Sei più rapido di $amount",
-            "Hai preso $amount al best lap",
-            "Passo migliore di $amount",
-            "Vantaggio di $amount",
-            "Stai girando $amount più forte",
-            "Hai limato $amount",
-            "Tempo in verde: $amount",
-            "Miglioramento di $amount"
+            "Delta negativo: guadagno di $amount",
+            "Delta negativo: recuperi $amount",
+            "Delta negativo: best lap battuto di $amount",
+            "Delta negativo: sei più rapido di $amount",
+            "Delta negativo: hai preso $amount al best lap",
+            "Delta negativo: passo migliore di $amount",
+            "Delta negativo: vantaggio di $amount",
+            "Delta negativo: stai girando $amount più forte",
+            "Delta negativo: hai limato $amount",
+            "Delta negativo: tempo in verde di $amount",
+            "Delta negativo: miglioramento di $amount"
         ) else listOf(
             "Delta positivo di $amount",
-            "Stai peggiorando di $amount",
-            "Hai perso $amount",
-            "Ritardo di $amount",
-            "Sei più lento di $amount",
-            "Il best lap si allontana di $amount",
-            "Perdi $amount sul giro migliore",
-            "Tempo in rosso: $amount",
-            "Scarto di $amount",
-            "Sei sopra di $amount",
-            "Calo di $amount",
-            "Manca $amount al best lap"
+            "Delta positivo: stai peggiorando di $amount",
+            "Delta positivo: hai perso $amount",
+            "Delta positivo: ritardo di $amount",
+            "Delta positivo: sei più lento di $amount",
+            "Delta positivo: il best lap si allontana di $amount",
+            "Delta positivo: perdi $amount sul giro migliore",
+            "Delta positivo: tempo in rosso di $amount",
+            "Delta positivo: scarto di $amount",
+            "Delta positivo: sei sopra di $amount",
+            "Delta positivo: calo di $amount",
+            "Delta positivo: mancano $amount al best lap"
         )
         val index = ((abs(ms) / 10 + elapsedMs / 1_000) % variants.size).toInt()
         return variants[index]
@@ -2676,16 +2676,16 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val recovered = spokenStopwatch(abs(previousMs - currentMs))
         val current = formatDelta(currentMs)
         val variants = listOf(
-            "Delta $current, recuperi $recovered",
-            "Stai riducendo il ritardo di $recovered. Delta $current",
-            "Recupero di $recovered, ora delta $current",
-            "Hai ripreso $recovered. Delta positivo $current",
-            "Il delta migliora di $recovered, resta $current",
-            "Riduci lo scarto di $recovered. Delta $current",
-            "Buon recupero: $recovered. Delta $current",
-            "Stai tornando verso il best lap: $recovered recuperati",
-            "Recuperi $recovered sul giro migliore",
-            "Delta in calo di $recovered, ora $current"
+            "Delta negativo $current, recuperi $recovered",
+            "Delta negativo $current: riduci il ritardo di $recovered",
+            "Delta negativo $current: recupero di $recovered",
+            "Delta negativo $current: hai ripreso $recovered",
+            "Delta negativo $current: migliora di $recovered",
+            "Delta negativo $current: riduci lo scarto di $recovered",
+            "Delta negativo $current: buon recupero di $recovered",
+            "Delta negativo $current: torni verso il best lap, recuperati $recovered",
+            "Delta negativo $current: recuperi $recovered sul giro migliore",
+            "Delta negativo $current: in calo di $recovered"
         )
         val index = ((currentMs / 10 + elapsedMs / 1_000) % variants.size).toInt()
         return variants[index]
