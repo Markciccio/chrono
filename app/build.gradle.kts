@@ -17,10 +17,12 @@ android {
 
     defaultConfig {
         applicationId = "it.crono"
-        minSdk = 26
+        // GPS, WebView/OSM and Android TTS used by Pit Engineer are available from
+        // Android 6.0 onward; keeping this low produces one APK usable on many phones.
+        minSdk = 23
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.1.6"
+        versionCode = 8
+        versionName = "0.1.7"
     }
 
     buildTypes {

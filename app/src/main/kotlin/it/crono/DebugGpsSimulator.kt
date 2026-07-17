@@ -8,7 +8,7 @@ import kotlin.math.sin
 
 /**
  * Development-only GPS feed used to exercise the exact same timing pipeline
- * indoors. It draws a non-intersecting horseshoe-style closed circuit around the latest real position,
+ * indoors. It draws a non-intersecting kart-style closed circuit around the latest real position,
  * emitting a point every 400 ms. Its centreline is scaled to 1.25 km;
  * the reference lap lasts about 90 seconds. Each later lap has a different average pace to make the live
  * delta and voice feedback observable.
@@ -23,17 +23,18 @@ class DebugGpsSimulator(
         private const val METERS_PER_LAT_DEG = 111_320.0
         private data class LocalPoint(val eastM: Double, val northM: Double)
         private const val TARGET_CIRCUIT_LENGTH_M = 1_250.0
-        // A simple horseshoe: outer clockwise arc followed by the inner return.
-        // The two branches stay well separated and the centreline never intersects itself.
+        // A compact kart circuit: main straight, hard braking zone, a flowing top complex,
+        // hairpin and an infield chicane.  The contour is deliberately asymmetric and
+        // non-intersecting so it resembles a real circuit rather than a geometric oval.
         private val RAW_CIRCUIT = listOf(
-            LocalPoint(72.0, -150.0), LocalPoint(120.0, -125.0), LocalPoint(150.0, -65.0),
-            LocalPoint(154.0, 35.0), LocalPoint(125.0, 112.0), LocalPoint(67.0, 162.0),
-            LocalPoint(0.0, 180.0), LocalPoint(-67.0, 162.0), LocalPoint(-125.0, 112.0),
-            LocalPoint(-154.0, 35.0), LocalPoint(-150.0, -65.0), LocalPoint(-120.0, -125.0),
-            LocalPoint(-72.0, -150.0), LocalPoint(-45.0, -112.0), LocalPoint(-55.0, -42.0),
-            LocalPoint(-58.0, 30.0), LocalPoint(-39.0, 82.0), LocalPoint(0.0, 108.0),
-            LocalPoint(39.0, 82.0), LocalPoint(58.0, 30.0), LocalPoint(55.0, -42.0),
-            LocalPoint(45.0, -112.0)
+            LocalPoint(0.0, -150.0), LocalPoint(105.0, -150.0), LocalPoint(155.0, -120.0),
+            LocalPoint(170.0, -58.0), LocalPoint(136.0, -12.0), LocalPoint(150.0, 52.0),
+            LocalPoint(108.0, 118.0), LocalPoint(50.0, 92.0), LocalPoint(12.0, 142.0),
+            LocalPoint(-58.0, 136.0), LocalPoint(-112.0, 100.0), LocalPoint(-88.0, 54.0),
+            LocalPoint(-148.0, 25.0), LocalPoint(-166.0, -40.0), LocalPoint(-130.0, -102.0),
+            LocalPoint(-76.0, -86.0), LocalPoint(-52.0, -132.0), LocalPoint(4.0, -112.0),
+            LocalPoint(46.0, -66.0), LocalPoint(7.0, -32.0), LocalPoint(-36.0, -56.0),
+            LocalPoint(-60.0, -110.0), LocalPoint(-26.0, -145.0)
         )
         private fun lengthOf(points: List<LocalPoint>) = points.indices.sumOf { index ->
             val from = points[index]

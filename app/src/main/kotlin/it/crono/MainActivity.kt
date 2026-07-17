@@ -90,6 +90,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     /** A lap call has radio priority over any live-delta call. */
     private var deltaAnnouncementsSuppressedUntilMs = Long.MIN_VALUE
     private var voiceEnabled = true
+    private var preferredVoiceName: String? = null
     private var voiceAlertIntervalMs = 10_000L
     private var voiceBriefingMode = VoiceBriefingMode.ALL
     private val preferences by lazy { getSharedPreferences("pit_engineer_options", MODE_PRIVATE) }
@@ -131,6 +132,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         sessionStore = SessionStore(this)
         trackStore = TrackStore(this)
+        preferredVoiceName = preferences.getString("engineerVoice", null)
         tts = TextToSpeech(this, this)
 
         val root = LinearLayout(this).apply {
@@ -306,6 +308,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             menu.add(if (voiceEnabled) "Voce: attiva" else "Voce: disattivata")
             menu.add("Avvisi di pista")
             menu.add("Frequenza avvisi vocali")
+            menu.add("Voce dell'ingegnere")
             menu.add("Dimensione live timing")
             menu.add("Orientamento schermo")
             menu.add("Elenco piste")
@@ -319,6 +322,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     }
                     "Avvisi di pista" -> showVoiceBriefingMenu()
                     "Frequenza avvisi vocali" -> showVoiceFrequencyMenu()
+                    "Voce dell'ingegnere" -> showEngineerVoiceMenu()
                     "Dimensione live timing" -> showLiveTimingSizeMenu()
                     "Orientamento schermo" -> showScreenOrientationMenu()
                     "Elenco piste" -> showTrackList()
@@ -548,6 +552,43 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 }
                 status.text = "Avvisi vocali: ${choices[which].substringBefore(" · ").lowercase()}"
                 if (voiceEnabled) speak("Frequenza ${choices[which].substringBefore(" · ").lowercase()}", flush = true)
+                dialog.dismiss()
+            }
+            .show()
+    }
+
+    private fun showEngineerVoiceMenu() {
+        val available = tts?.voices
+            ?.filter { it.locale.language.equals(Locale.ITALIAN.language, ignoreCase = true) }
+            ?.sortedBy { it.name }
+            .orEmpty()
+        if (available.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Voce dell'ingegnere")
+                .setMessage("Il telefono non ha altre voci italiane disponibili. Puoi scaricarle da Impostazioni Android · Accessibilità · Sintesi vocale.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+        fun label(index: Int, name: String): String {
+            val lower = name.lowercase(Locale.ITALIAN)
+            val style = when {
+                "female" in lower || "femmin" in lower -> "femminile"
+                "male" in lower || "masch" in lower -> "maschile"
+                else -> "italiana ${index + 1}"
+            }
+            return "Voce $style"
+        }
+        val selected = available.indexOfFirst { it.name == preferredVoiceName }.coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("Voce dell'ingegnere")
+            .setSingleChoiceItems(available.mapIndexed { index, voice -> label(index, voice.name) }.toTypedArray(), selected) { dialog, which ->
+                val voice = available[which]
+                tts?.voice = voice
+                preferredVoiceName = voice.name
+                preferences.edit().putString("engineerVoice", voice.name).apply()
+                status.text = "Voce dell'ingegnere aggiornata"
+                speak("Questa è la voce dell'ingegnere", flush = true)
                 dialog.dismiss()
             }
             .show()
@@ -1771,7 +1812,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private fun formatDelta(ms: Long) = "%+.2f".format(Locale.US, ms / 1_000.0)
 
     override fun onInit(result: Int) {
-        if (result == TextToSpeech.SUCCESS) tts?.language = Locale.ITALIAN
+        if (result == TextToSpeech.SUCCESS) {
+            tts?.language = Locale.ITALIAN
+            preferredVoiceName?.let { name -> tts?.voices?.firstOrNull { it.name == name }?.let { tts?.voice = it } }
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -1973,6 +2017,17 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             labelPaint.color = Color.rgb(72, 205, 255)
             labelPaint.textAlign = Paint.Align.CENTER
             canvas.drawText("SESSIONI", (sessionsLeft + sessionsRight) / 2f, sessionsTop + dp(24), labelPaint)
+            val tracksRight = sessionsLeft - dp(7)
+            val tracksLeft = tracksRight - dp(84)
+            sessionsPaint.style = Paint.Style.FILL
+            sessionsPaint.color = Color.rgb(7, 31, 41)
+            canvas.drawRoundRect(tracksLeft, sessionsTop, tracksRight, sessionsBottom, dp(5).toFloat(), dp(5).toFloat(), sessionsPaint)
+            sessionsPaint.style = Paint.Style.STROKE
+            sessionsPaint.strokeWidth = dp(1).toFloat()
+            sessionsPaint.color = Color.rgb(174, 119, 255)
+            canvas.drawRoundRect(tracksLeft, sessionsTop, tracksRight, sessionsBottom, dp(5).toFloat(), dp(5).toFloat(), sessionsPaint)
+            labelPaint.color = Color.rgb(174, 119, 255)
+            canvas.drawText("PISTE", (tracksLeft + tracksRight) / 2f, sessionsTop + dp(24), labelPaint)
 
             primaryPaint.textAlign = Paint.Align.CENTER
             primaryPaint.textSize = timingTextSize(48)
@@ -2011,7 +2066,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     panX += dx; panY += dy; lastX = event.x; lastY = event.y; invalidate()
                 }
                 MotionEvent.ACTION_UP -> if (!dragged && !scaleDetector.isInProgress) {
-                    if (isSessionsButton(event.x, event.y)) showSessionHistory()
+                    if (isTracksButton(event.x, event.y)) showTrackList()
+                    else if (isSessionsButton(event.x, event.y)) showSessionHistory()
                     else if (track.isNotEmpty()) onTrackTapped?.invoke(pointAt(event.x, event.y))
                 }
             }
@@ -2020,6 +2076,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
 
         private fun isSessionsButton(x: Float, y: Float): Boolean =
             x >= width - dp(132) && x <= width - dp(14) && y >= height - dp(52) && y <= height - dp(14)
+
+        private fun isTracksButton(x: Float, y: Float): Boolean =
+            x >= width - dp(223) && x <= width - dp(139) && y >= height - dp(52) && y <= height - dp(14)
 
         private fun ensurePath() {
             if (path != null && cachedWidth == width && cachedHeight == height) return
