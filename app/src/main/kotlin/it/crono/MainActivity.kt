@@ -491,6 +491,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }.apply { setTrack(points); postDelayed({ fitEntireTrack() }, 400) }
         val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(12), dp(14), dp(12)); setBackgroundColor(Color.rgb(7, 24, 33)) }
         info.addView(TextView(this).apply { text = track.name.uppercase(Locale.ITALIAN); textSize = 21f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) })
+        info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(6) })
         selectedLabel = TextView(this).apply { textSize = 14f; setTextColor(Color.rgb(184, 223, 235)); setPadding(0, dp(14), 0, dp(10)) }
         info.addView(selectedLabel)
         markerButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -520,9 +521,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     trackStore.delete(track); if (activeSavedTrack?.id == track.id) useAutomaticFinish(); dialog.dismiss()
                 }.show()
         }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(5) })
-        info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(5) })
         root.addView(map, LinearLayout.LayoutParams(0, -1, .62f).apply { rightMargin = dp(6) })
-        root.addView(info, LinearLayout.LayoutParams(0, -1, .38f))
+        root.addView(ScrollView(this).apply { isFillViewport = true; addView(info) }, LinearLayout.LayoutParams(0, -1, .38f))
         dialog.setContentView(root)
         dialog.show()
         dialog.window?.apply { setLayout(-1, -1); setBackgroundDrawable(ColorDrawable(Color.rgb(3, 9, 14))); decorView.systemUiVisibility = window.decorView.systemUiVisibility }
@@ -1646,21 +1646,27 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         private val onSessionUpdated: (SavedSession) -> Unit
     ) : View(this@MainActivity) {
         private val validLaps = session.laps.filter { it.valid }
-        private val sectorCount = maxOf(session.sectorLines.size, validLaps.maxOfOrNull { it.sectorElapsedMs.size } ?: 0).coerceIn(0, 3)
+        private val geometryLap = validLaps.firstOrNull() ?: session.laps.firstOrNull()
+        private val analysisSectors = geometryLap?.let { geometryForSession(session, it).sectors }.orEmpty().take(3)
+        private val sectorCount = maxOf(analysisSectors.size, validLaps.maxOfOrNull { it.sectorElapsedMs.size } ?: 0).coerceIn(0, 3)
         private val best = validLaps.minOfOrNull { it.durationMs }
         private val average = validLaps.takeIf { it.isNotEmpty() }?.map { it.durationMs }?.average()?.toLong()
+        private fun sectorTimes(lap: RecordedLap): List<Long?> = if (analysisSectors.isNotEmpty()) {
+            analysisSectors.map { line -> elapsedAtLine(lap.samples, line) }
+        } else lap.sectorElapsedMs.map { it }
         /** The ideal lap is the sum of the best independently recorded segments.  A partial
          * lap must not hide it: only the segment that lacks a reading is ignored. */
         private val ideal = if (sectorCount > 0) {
             val segments = (0..sectorCount).mapNotNull { segment ->
                 validLaps.mapNotNull { lap ->
+                    val sectors = sectorTimes(lap)
                     when {
-                        segment < sectorCount && lap.sectorElapsedMs.size > segment -> {
-                            val start = if (segment == 0) 0L else lap.sectorElapsedMs[segment - 1]
-                            lap.sectorElapsedMs[segment] - start
+                        segment < sectorCount && sectors.getOrNull(segment) != null -> {
+                            val start = if (segment == 0) 0L else sectors[segment - 1] ?: return@mapNotNull null
+                            sectors[segment]!! - start
                         }
-                        segment == sectorCount && lap.sectorElapsedMs.size >= sectorCount ->
-                            lap.durationMs - lap.sectorElapsedMs[segment - 1]
+                        segment == sectorCount && sectors.getOrNull(segment - 1) != null ->
+                            lap.durationMs - sectors[segment - 1]!!
                         else -> null
                     }
                 }.minOrNull()
@@ -1729,8 +1735,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 rowPaint.color = if (lap.valid) rowColor else Color.rgb(122, 143, 151)
                 canvas.drawText(if (lap.valid) formatDelta(delta) else "NON VALIDO", columns[2], y, rowPaint)
                 rowPaint.color = Color.rgb(255, 205, 90)
+                val lapSectors = sectorTimes(lap)
                 repeat(sectorCount) { sector ->
-                    canvas.drawText(lap.sectorElapsedMs.getOrNull(sector)?.let(::formatTime) ?: "—", columns[3 + sector], y, rowPaint)
+                    canvas.drawText(lapSectors.getOrNull(sector)?.let(::formatTime) ?: "—", columns[3 + sector], y, rowPaint)
                 }
                 rowPaint.color = Color.rgb(255, 112, 112)
                 canvas.drawText(lap.samples.maxOfOrNull { it.speedMps }?.times(3.6f)?.toInt()?.toString() ?: "—", columns[3 + sectorCount], y, rowPaint)
