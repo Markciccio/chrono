@@ -3001,7 +3001,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             lastPaint.textSize = timingTextSize(22); lastPaint.color = Color.rgb(238, 245, 247)
             val lastCenter = (pad + mid - gap) / 2f
             val currentCenter = (mid + gap + width - pad) / 2f
-            labelPaint.textSize = timingTextSize(10)
+            labelPaint.textSize = timingTextSize(9)
             canvas.drawText("LAST LAP", lastCenter, cardTop + dp(17), labelPaint)
             val lastValue = last
             val bestValue = best
@@ -3014,7 +3014,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             labelPaint.color = when { lastDelta == null -> Color.rgb(145, 164, 174); lastDelta == 0L -> green; else -> red }
             canvas.drawText(lastDelta?.let(::formatDelta) ?: "", lastCenter + lastPaint.measureText(lastText) / 2f - dp(7), cardBottom - dp(11), labelPaint)
             labelPaint.textAlign = Paint.Align.CENTER
-            labelPaint.textSize = timingTextSize(10)
+            labelPaint.textSize = timingTextSize(9)
             labelPaint.color = Color.rgb(112, 157, 174)
             canvas.drawText("CURRENT LAP", currentCenter, cardTop + dp(17), labelPaint)
             val currentText = elapsed?.let(::formatTime) ?: "--:--.---"
