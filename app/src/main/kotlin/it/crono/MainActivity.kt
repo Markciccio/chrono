@@ -1657,9 +1657,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), dp(6).toFloat(), dp(6).toFloat(), panel)
             canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), dp(6).toFloat(), dp(6).toFloat(), border)
             chartLeft = dp(42).toFloat(); chartRight = width - dp(20).toFloat()
-            val topSpeed = dp(58).toFloat(); val bottomSpeed = height * .29f
-            val topCumulative = height * .38f; val bottomCumulative = height * .58f
-            val topLocal = height * .68f; val bottomLocal = height - dp(58).toFloat()
+            val topSpeed = dp(90).toFloat(); val bottomSpeed = height * .31f
+            val topCumulative = height * .40f; val bottomCumulative = height * .59f
+            val topLocal = height * .69f; val bottomLocal = height - dp(58).toFloat()
+            drawSimpleExplanation(canvas)
             drawTitle(canvas, "VELOCITÀ / DISTANZA", dp(14).toFloat())
             drawSpeedChart(canvas, topSpeed, bottomSpeed)
             drawTitle(canvas, "DELTA TEMPO CUMULATIVO / DISTANZA", topCumulative - dp(13))
@@ -1668,6 +1669,42 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             drawLocalChart(canvas, topLocal, bottomLocal)
             drawLegend(canvas)
             drawCursor(canvas, topSpeed, bottomLocal)
+        }
+
+        /** A human explanation of the same plotted facts: no invented throttle/brake data. */
+        private fun drawSimpleExplanation(canvas: Canvas) {
+            val bins = localBins()
+            val bestZone = bins.maxByOrNull { it.deltaMs }
+            val worstZone = bins.minByOrNull { it.deltaMs }
+            val finalMs = best.durationMs - analysed.durationMs
+            val headline = when {
+                finalMs > 120 -> "LETTURA SEMPLICE: questo giro è ${"%.2f".format(Locale.US, finalMs / 1_000.0)} s più veloce del riferimento."
+                finalMs < -120 -> "LETTURA SEMPLICE: questo giro perde ${"%.2f".format(Locale.US, -finalMs / 1_000.0)} s dal riferimento."
+                else -> "LETTURA SEMPLICE: questo giro è praticamente sul ritmo del riferimento."
+            }
+            fun zoneText(bin: LocalDeltaBin?, positive: Boolean): String {
+                if (bin == null) return ""
+                val middle = ((bin.start + bin.end) / 2).coerceIn(0, comparison.speedA.lastIndex)
+                val speedGap = comparison.speedA[middle] - comparison.speedB[middle]
+                val cause = when {
+                    speedGap <= -3f -> "qui A è ${-speedGap.toInt()} km/h più lento: controlla frenata, percorrenza o uscita."
+                    speedGap >= 3f -> "qui A è ${speedGap.toInt()} km/h più veloce: è un tratto da replicare."
+                    positive -> "il guadagno non è solo velocità di punta: probabilmente linea e continuità sono migliori."
+                    else -> "la perdita non è solo velocità di punta: cerca un errore di linea o di timing in curva."
+                }
+                return "${if (positive) "Miglior" else "Peggior"} tratto: m ${bin.start}-${bin.end}, ${"%+.0f".format(Locale.US, bin.deltaMs)} ms; $cause"
+            }
+            val detail = when {
+                finalMs < -120 -> zoneText(worstZone, positive = false)
+                finalMs > 120 -> zoneText(bestZone, positive = true)
+                else -> zoneText(worstZone, positive = false)
+            }
+            val box = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(8, 28, 38) }
+            canvas.drawRoundRect(dp(8).toFloat(), dp(23).toFloat(), width - dp(58).toFloat(), dp(78).toFloat(), dp(4).toFloat(), dp(4).toFloat(), box)
+            white.textAlign = Paint.Align.LEFT; white.textSize = dp(12).toFloat(); white.color = Color.rgb(210, 237, 246)
+            canvas.drawText(headline, dp(15).toFloat(), dp(43).toFloat(), white)
+            white.textSize = dp(11).toFloat(); white.color = Color.rgb(170, 212, 227)
+            canvas.drawText(detail.take(120), dp(15).toFloat(), dp(63).toFloat(), white)
         }
 
         private fun drawTitle(canvas: Canvas, title: String, y: Float) {
