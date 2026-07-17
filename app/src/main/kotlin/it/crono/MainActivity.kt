@@ -1485,6 +1485,77 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         dialog.show()
     }
 
+    /** Speed traces normalized by distance, so laps with different durations can be compared
+     * corner by corner just like a race-engineering overlay. */
+    private inner class SpeedComparisonView(lap: RecordedLap, bestLap: RecordedLap) : View(this@MainActivity) {
+        private val lapProfile = speedProfile(lap)
+        private val bestProfile = speedProfile(bestLap)
+        private val maxSpeed = maxOf(lapProfile.maxOrNull() ?: 1f, bestProfile.maxOrNull() ?: 1f, 10f)
+        private val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(232, 3, 8, 13) }
+        private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(180, 194, 205); style = Paint.Style.STROKE; strokeWidth = dp(1).toFloat() }
+        private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(55, 72, 82); strokeWidth = dp(1).toFloat() }
+        private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = dp(10).toFloat(); typeface = Typeface.DEFAULT_BOLD }
+        private val bestPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0, 232, 31); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
+        private val lapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(35, 151, 255); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
+
+        override fun onDraw(canvas: Canvas) {
+            val inset = dp(5).toFloat()
+            canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), dp(5).toFloat(), dp(5).toFloat(), panelPaint)
+            canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), dp(5).toFloat(), dp(5).toFloat(), borderPaint)
+            val chartLeft = dp(12).toFloat()
+            val chartRight = width - dp(8).toFloat()
+            val chartTop = dp(29).toFloat()
+            val chartBottom = height - dp(17).toFloat()
+            (0..3).forEach { index ->
+                val y = chartTop + (chartBottom - chartTop) * index / 3f
+                canvas.drawLine(chartLeft, y, chartRight, y, gridPaint)
+            }
+            canvas.drawText("VELOCITÀ / DISTANZA", inset + dp(5), dp(14).toFloat(), titlePaint)
+            titlePaint.color = bestPaint.color
+            canvas.drawText("— BEST", width - dp(95).toFloat(), dp(14).toFloat(), titlePaint)
+            titlePaint.color = lapPaint.color
+            canvas.drawText("— GIRO", width - dp(43).toFloat(), dp(14).toFloat(), titlePaint)
+            titlePaint.color = Color.WHITE
+            titlePaint.textSize = dp(8).toFloat()
+            canvas.drawText("0", chartLeft, height - dp(5).toFloat(), titlePaint)
+            titlePaint.textAlign = Paint.Align.RIGHT
+            canvas.drawText("100%", chartRight, height - dp(5).toFloat(), titlePaint)
+            titlePaint.textAlign = Paint.Align.LEFT
+            drawProfile(canvas, bestProfile, chartLeft, chartRight, chartTop, chartBottom, bestPaint)
+            drawProfile(canvas, lapProfile, chartLeft, chartRight, chartTop, chartBottom, lapPaint)
+        }
+
+        private fun drawProfile(canvas: Canvas, profile: List<Float>, left: Float, right: Float, top: Float, bottom: Float, paint: Paint) {
+            if (profile.size < 2) return
+            val path = Path()
+            profile.forEachIndexed { index, speed ->
+                val x = left + (right - left) * index / (profile.size - 1).toFloat()
+                val y = bottom - (bottom - top) * (speed / maxSpeed).coerceIn(0f, 1f)
+                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            canvas.drawPath(path, paint)
+        }
+
+        private fun speedProfile(lap: RecordedLap, samples: Int = 72): List<Float> {
+            val source = lap.samples
+            if (source.size < 2) return emptyList()
+            val distance = DoubleArray(source.size)
+            for (index in 1 until source.size) {
+                distance[index] = distance[index - 1] + Geo.distanceM(source[index - 1].lat, source[index - 1].lon, source[index].lat, source[index].lon)
+            }
+            val total = distance.last().takeIf { it > 0.5 } ?: return source.map { it.speedMps * 3.6f }
+            var segment = 1
+            return List(samples) { step ->
+                val target = total * step / (samples - 1).toDouble()
+                while (segment < distance.lastIndex && distance[segment] < target) segment++
+                val previous = (segment - 1).coerceAtLeast(0)
+                val length = (distance[segment] - distance[previous]).takeIf { it > .01 } ?: 1.0
+                val fraction = ((target - distance[previous]) / length).coerceIn(0.0, 1.0)
+                ((source[previous].speedMps.toDouble() + (source[segment].speedMps - source[previous].speedMps).toDouble() * fraction) * 3.6).toFloat()
+            }
+        }
+    }
+
     private fun showLapReview(session: SavedSession, lap: RecordedLap, onSessionUpdated: (SavedSession) -> Unit = {}) {
         if (lap.samples.size < 3) {
             AlertDialog.Builder(this).setTitle("Mappa giro").setMessage("Questo giro non contiene abbastanza punti GPS per la mappa.").setPositiveButton("OK", null).show()
@@ -1509,6 +1580,18 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             setSectors(sectors)
             setSpeedMarkers(speedMarkersForLap(lap))
             postDelayed({ fitEntireTrack() }, 500)
+        }
+        val referenceLap = session.laps.filter { it.valid }.minByOrNull { it.durationMs }
+        val mapFrame = FrameLayout(this).apply {
+            addView(map, FrameLayout.LayoutParams(-1, -1))
+            referenceLap?.let { best ->
+                addView(
+                    SpeedComparisonView(lap, best),
+                    FrameLayout.LayoutParams(dp(282), dp(142), Gravity.BOTTOM or Gravity.START).apply {
+                        leftMargin = dp(10); bottomMargin = dp(10)
+                    }
+                )
+            }
         }
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1539,7 +1622,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             onSessionUpdated(updated)
         }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
         info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
-        root.addView(map, LinearLayout.LayoutParams(0, -1, .72f).apply { rightMargin = dp(6) })
+        root.addView(mapFrame, LinearLayout.LayoutParams(0, -1, .72f).apply { rightMargin = dp(6) })
         root.addView(info, LinearLayout.LayoutParams(0, -1, .28f))
         dialog.setContentView(root)
         dialog.show()
