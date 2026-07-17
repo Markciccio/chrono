@@ -6,9 +6,11 @@ package it.crono
  * and movement to avoid arming while stationary near the start.
  */
 class AutoFinishDetector(
-    private val minimumLoopMs: Long = 20_000,
+    private val minimumLoopMs: Long = 45_000,
     private val proximityM: Double = 12.0,
-    private val minimumSpeedMps: Float = 3f
+    private val minimumSpeedMps: Float = 3f,
+    private val minimumPathM: Double = 350.0,
+    private val minimumExcursionM: Double = 80.0
 ) {
     private val samples = mutableListOf<GpsSample>()
 
@@ -26,6 +28,8 @@ class AutoFinishDetector(
             .filter { it < samples.lastIndex }
             .filter { sample.timeMs - samples[it].timeMs >= minimumLoopMs }
             .filter { Geo.distanceM(sample.lat, sample.lon, samples[it].lat, samples[it].lon) <= proximityM }
+            .filter { index -> traveledDistanceM(index, samples.lastIndex) >= minimumPathM }
+            .filter { index -> maximumExcursionM(index, samples.lastIndex) >= minimumExcursionM }
             .filter { index ->
                 val before = samples[(index - 1).coerceAtLeast(0)]
                 val point = samples[index]
@@ -41,4 +45,22 @@ class AutoFinishDetector(
     }
 
     fun recordedSamples(): List<GpsSample> = samples.toList()
+
+    private fun traveledDistanceM(startIndex: Int, endIndex: Int): Double {
+        var distance = 0.0
+        for (index in (startIndex + 1)..endIndex) {
+            val previous = samples[index - 1]
+            val current = samples[index]
+            distance += Geo.distanceM(previous.lat, previous.lon, current.lat, current.lon)
+        }
+        return distance
+    }
+
+    private fun maximumExcursionM(startIndex: Int, endIndex: Int): Double {
+        val start = samples[startIndex]
+        return (startIndex..endIndex).maxOfOrNull { index ->
+            val point = samples[index]
+            Geo.distanceM(start.lat, start.lon, point.lat, point.lon)
+        } ?: 0.0
+    }
 }

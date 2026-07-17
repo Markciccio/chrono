@@ -41,7 +41,7 @@ class TimingEngineTest {
     }
 
     @Test fun `auto detector creates a line only after a plausible loop closure`() {
-        val detector = AutoFinishDetector(minimumLoopMs = 40_000, proximityM = 18.0)
+        val detector = AutoFinishDetector(minimumLoopMs = 40_000, proximityM = 18.0, minimumPathM = 30.0, minimumExcursionM = 25.0)
         detector.process(sample(44.9998, 9.0, 0))
         detector.process(sample(45.0000, 9.0, 1_000))
         detector.process(sample(45.0003, 9.0, 15_000))
@@ -59,6 +59,20 @@ class TimingEngineTest {
         }
         assertNotNull(discovery)
         assertTrue(discovery!!.lap.durationMs in 75_000..110_000)
+    }
+
+    @Test fun `auto detector ignores a small GPS orbit around one point`() {
+        val detector = AutoFinishDetector(minimumLoopMs = 20_000, proximityM = 18.0, minimumPathM = 350.0, minimumExcursionM = 80.0)
+        val points = listOf(
+            45.00000 to 9.00000, 45.00003 to 9.00000,
+            45.00000 to 9.00004, 44.99997 to 9.00000,
+            45.00000 to 8.99996, 45.00000 to 9.00000
+        )
+        repeat(8) { loop ->
+            points.forEachIndexed { index, (lat, lon) ->
+                assertNull(detector.process(sample(lat, lon, (loop * points.size + index) * 10_000L)))
+            }
+        }
     }
 
     @Test fun `simulator reports both automatic sectors after loop discovery`() {

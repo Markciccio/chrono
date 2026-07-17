@@ -28,9 +28,11 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
+import android.view.ViewGroup
 import android.view.Window
 import android.widget.Button
 import android.widget.FrameLayout
@@ -69,6 +71,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var paused = false
     private var pausedLapElapsedMs: Long? = null
     private var lowSpeedSinceMs: Long? = null
+    private var screenLockOverlay: View? = null
     private val timing = TimingEngine()
     private var bestLap: Lap? = null
     private var predictor: PredictiveDelta? = null
@@ -95,6 +98,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var testButton: Button? = null
     private var startButton: Button? = null
     private var pauseButton: Button? = null
+    private var lockButton: Button? = null
     private lateinit var sessionStore: SessionStore
     private val recordedLaps = mutableListOf<RecordedLap>()
     private val currentSectorTimes = linkedMapOf<Int, Long>()
@@ -203,7 +207,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         control(secondControlRow, "SPOSTA SETTORE", 1f) { showMoveSectorMenu() }
         testButton = actionButton("TEST GPS") { toggleSimulation() }
         thirdControlRow.addView(testButton, controlParams(.5f))
-        thirdControlRow.addView(View(this), controlParams(.5f))
+        lockButton = actionButton("BLOCCA") { lockScreen() }
+        thirdControlRow.addView(lockButton, controlParams(.5f))
         controls.addView(firstControlRow, LinearLayout.LayoutParams(-1, dp(39)))
         controls.addView(secondControlRow, LinearLayout.LayoutParams(-1, dp(39)))
         controls.addView(thirdControlRow, LinearLayout.LayoutParams(-1, dp(39)))
@@ -252,6 +257,49 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    /** Keeps the telemetry visible while swallowing every accidental touch in a pocket. */
+    private fun lockScreen() {
+        if (screenLockOverlay != null) return
+        var downX = 0f
+        var downY = 0f
+        screenLockOverlay = View(this).apply {
+            // Nearly transparent on purpose: numbers stay readable, but no control receives taps.
+            setBackgroundColor(Color.argb(8, 0, 0, 0))
+            isClickable = true
+            setOnTouchListener { _, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { downX = event.x; downY = event.y; true }
+                    MotionEvent.ACTION_UP -> {
+                        if (event.x - downX > dp(150) && abs(event.y - downY) < dp(90)) unlockScreen()
+                        true
+                    }
+                    else -> true
+                }
+            }
+        }
+        addContentView(screenLockOverlay, ViewGroup.LayoutParams(-1, -1))
+        status.text = "🔒 SCHERMO BLOCCATO · scorri verso destra o premi un tasto volume"
+        speak("Schermo bloccato", flush = true)
+    }
+
+    private fun unlockScreen() {
+        val overlay = screenLockOverlay ?: return
+        (overlay.parent as? ViewGroup)?.removeView(overlay)
+        screenLockOverlay = null
+        status.text = if (running) "Registrazione attiva" else "Schermo sbloccato"
+        speak("Schermo sbloccato", flush = true)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (screenLockOverlay != null && event.action == KeyEvent.ACTION_UP &&
+            (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)
+        ) {
+            unlockScreen()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
 
     private fun showAdvancedOptions(anchor: View) {
         PopupMenu(this, anchor).apply {
@@ -904,6 +952,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun updateStatus() {
+        if (screenLockOverlay != null) {
+            status.text = "🔒 SCHERMO BLOCCATO · scorri verso destra o premi un tasto volume"
+            return
+        }
         val fix = latestFix ?: return
         val lineText = if (timing.line == null) if (running) "ricerca giro" else "automatico" else "traguardo pronto"
         val runText = when {
