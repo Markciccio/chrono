@@ -21,7 +21,9 @@ data class SavedSession(
     val gpxName: String?,
     val laps: List<RecordedLap>,
     val maxSpeedMps: Float? = null,
-    val minSpeedMps: Float? = null
+    val minSpeedMps: Float? = null,
+    val timingLine: TimingLine? = null,
+    val sectorLines: List<TimingLine> = emptyList()
 )
 
 class SessionStore(context: Context) {
@@ -37,6 +39,8 @@ class SessionStore(context: Context) {
             put("gpxName", session.gpxName ?: JSONObject.NULL)
             put("maxSpeedMps", session.maxSpeedMps ?: JSONObject.NULL)
             put("minSpeedMps", session.minSpeedMps ?: JSONObject.NULL)
+            put("timingLine", session.timingLine?.let(::lineJson) ?: JSONObject.NULL)
+            put("sectorLines", JSONArray().apply { session.sectorLines.forEach { put(lineJson(it)) } })
             put("laps", JSONArray().apply {
                 session.laps.forEach { lap ->
                     put(JSONObject().apply {
@@ -99,7 +103,21 @@ class SessionStore(context: Context) {
             if (json.isNull("gpxName")) null else json.getString("gpxName"),
             laps,
             if (json.isNull("maxSpeedMps")) null else json.optDouble("maxSpeedMps").toFloat(),
-            if (json.isNull("minSpeedMps")) null else json.optDouble("minSpeedMps").toFloat()
+            if (json.isNull("minSpeedMps")) null else json.optDouble("minSpeedMps").toFloat(),
+            json.optJSONObject("timingLine")?.let(::parseLine),
+            json.optJSONArray("sectorLines")?.let { lines -> (0 until lines.length()).map { parseLine(lines.getJSONObject(it)) } } ?: emptyList()
         )
     }
+
+    private fun lineJson(line: TimingLine) = JSONObject().apply {
+        put("aLat", line.pointA.lat); put("aLon", line.pointA.lon)
+        put("bLat", line.pointB.lat); put("bLon", line.pointB.lon)
+        put("heading", line.allowedHeadingDeg); put("minimumSpeed", line.minimumSpeedMps)
+    }
+
+    private fun parseLine(json: JSONObject) = TimingLine(
+        TrackPoint(json.getDouble("aLat"), json.getDouble("aLon")),
+        TrackPoint(json.getDouble("bLat"), json.getDouble("bLon")),
+        json.getDouble("heading"), json.optDouble("minimumSpeed", 2.0)
+    )
 }

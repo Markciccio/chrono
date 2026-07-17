@@ -72,6 +72,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var pausedLapElapsedMs: Long? = null
     private var lowSpeedSinceMs: Long? = null
     private var screenLockOverlay: View? = null
+    private var activeSavedTrack: SavedTrack? = null
+    private var lastSuggestedTrackIds = emptySet<String>()
     private val timing = TimingEngine()
     private var bestLap: Lap? = null
     private var predictor: PredictiveDelta? = null
@@ -100,6 +102,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var pauseButton: Button? = null
     private var lockButton: Button? = null
     private lateinit var sessionStore: SessionStore
+    private lateinit var trackStore: TrackStore
     private val recordedLaps = mutableListOf<RecordedLap>()
     private val currentSectorTimes = linkedMapOf<Int, Long>()
     /** Best duration for each individual segment, independent from the best full lap. */
@@ -127,6 +130,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             )
         locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         sessionStore = SessionStore(this)
+        trackStore = TrackStore(this)
         tts = TextToSpeech(this, this)
 
         val root = LinearLayout(this).apply {
@@ -442,6 +446,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun useAutomaticFinish() {
+        activeSavedTrack = null
         timing.line = null
         timing.sectors = emptyList()
         sectorReferences = emptyList()
@@ -454,6 +459,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun loadTrack(points: List<TrackPoint>, name: String) {
+        activeSavedTrack = null
         route = points
         timing.line = null
         resetSession(keepTrack = true)
@@ -490,6 +496,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             speak("Attendo il segnale GPS", flush = true)
             return
         }
+        activeSavedTrack = null
         val center = TrackPoint(fix.lat, fix.lon)
         val heading = previousFix?.let { Geo.headingDeg(TrackPoint(it.lat, it.lon), center) }
             ?: headingFromRoute(center)
@@ -520,6 +527,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun setTimingLineAtMapPoint(tapped: TrackPoint) {
+        activeSavedTrack = null
         val center = route.getOrNull(Geo.nearestRouteIndex(tapped, route)) ?: tapped
         val heading = headingFromRoute(center)
         timing.line = Geo.timingLine(center, heading)
@@ -744,6 +752,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private fun processSample(sample: GpsSample) {
         previousFix = latestFix
         latestFix = sample
+        if (!running) offerNearbySavedTracks(sample)
         if (running && !paused) {
             liveRoute += TrackPoint(sample.lat, sample.lon)
             sessionSamples += sample
@@ -787,6 +796,50 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             running && !paused
         )
         trackMap.setFix(latestFix)
+    }
+
+    private fun offerNearbySavedTracks(sample: GpsSample) {
+        val nearby = trackStore.nearby(TrackPoint(sample.lat, sample.lon))
+        val ids = nearby.map { it.id }.toSet()
+        if (ids.isEmpty()) {
+            lastSuggestedTrackIds = emptySet()
+            return
+        }
+        if (ids == lastSuggestedTrackIds) return
+        lastSuggestedTrackIds = ids
+        val labels = nearby.map { "${it.name} · ${formatTime(it.lap.durationMs)}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Piste nelle vicinanze")
+            .setMessage("Scegli una pista salvata per caricare traguardo e settori.")
+            .setItems(labels) { _, which -> activateSavedTrack(nearby[which]) }
+            .setNegativeButton("NON ORA", null)
+            .show()
+    }
+
+    private fun activateSavedTrack(track: SavedTrack) {
+        activeSavedTrack = track
+        configureSavedTrack(track)
+        status.text = "${track.name} caricata · traguardo e ${track.sectors.size} settori pronti"
+        speak("${track.name} caricata. Traguardo e settori pronti", flush = true)
+    }
+
+    private fun configureSavedTrack(track: SavedTrack) {
+        val referenceLap = Lap(track.lap.number, track.lap.durationMs, track.lap.samples)
+        route = track.lap.samples.map { TrackPoint(it.lat, it.lon) }
+        bestLap = referenceLap
+        predictor = PredictiveDelta(referenceLap.samples)
+        timing.line = track.finishLine
+        timing.sectors = track.sectors
+        sectorReferences = track.sectors.mapIndexed { index, line ->
+            SectorReference(index + 1, line, elapsedAtLine(referenceLap.samples, line) ?: 0L)
+        }
+        seedBestSectorSegments(referenceLap)
+        dashboard.setTrack(route)
+        dashboard.setTimingLine(track.finishLine)
+        trackMap.setTrack(route)
+        trackMap.setTimingLine(track.finishLine)
+        trackMap.setSectors(track.sectors)
+        trackMap.fitEntireTrack()
     }
 
     private fun toggleSimulation() {
@@ -1081,7 +1134,9 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 gpxName = gpxName,
                 laps = recordedLaps.toList(),
                 maxSpeedMps = sessionSamples.maxOfOrNull { it.speedMps },
-                minSpeedMps = sessionSamples.minOfOrNull { it.speedMps }
+                minSpeedMps = sessionSamples.minOfOrNull { it.speedMps },
+                timingLine = timing.line,
+                sectorLines = timing.sectors
             )
         )
     }
@@ -1161,6 +1216,81 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         dialog.show()
     }
 
+    private fun showLapReview(session: SavedSession, lap: RecordedLap) {
+        if (lap.samples.size < 3) {
+            AlertDialog.Builder(this).setTitle("Mappa giro").setMessage("Questo giro non contiene abbastanza punti GPS per la mappa.").setPositiveButton("OK", null).show()
+            return
+        }
+        val finish = session.timingLine ?: lineFromLap(lap)
+        val sectors = session.sectorLines.ifEmpty { deriveSectors(lap.samples).map { it.line } }
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setBackgroundColor(Color.rgb(3, 9, 14))
+        }
+        val map = TrackMapView(this) { }.apply {
+            setTrack(lap.samples.map { TrackPoint(it.lat, it.lon) })
+            setTimingLine(finish)
+            setSectors(sectors)
+            postDelayed({ fitEntireTrack() }, 500)
+        }
+        val summary = speedSummary(lap)
+        val info = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setBackgroundColor(Color.rgb(7, 24, 33))
+        }
+        info.addView(TextView(this).apply {
+            text = "LAP ${lap.number}\n${formatTime(lap.durationMs)}"
+            textSize = 24f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
+        })
+        info.addView(TextView(this).apply {
+            text = "\nV MAX  ${summary.maxKmh} km/h\nV MIN  ${summary.minKmh} km/h\n\nFRENATA  ${summary.brakingMinKmh} km/h\nUSCITA CURVA  ${summary.accelerationMaxKmh} km/h"
+            textSize = 16f; setTextColor(Color.rgb(184, 223, 235))
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
+        info.addView(actionButton("SALVA COME PISTA") {
+            saveLapAsTrack(session, lap, finish, sectors)
+        }, LinearLayout.LayoutParams(-1, dp(44)))
+        info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
+        root.addView(map, LinearLayout.LayoutParams(0, -1, .58f).apply { rightMargin = dp(6) })
+        root.addView(info, LinearLayout.LayoutParams(0, -1, .42f))
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.apply {
+            setLayout(-1, -1)
+            setBackgroundDrawable(ColorDrawable(Color.rgb(3, 9, 14)))
+            decorView.systemUiVisibility = window.decorView.systemUiVisibility
+        }
+    }
+
+    private data class LapSpeedSummary(val maxKmh: Int, val minKmh: Int, val brakingMinKmh: Int, val accelerationMaxKmh: Int)
+
+    private fun speedSummary(lap: RecordedLap): LapSpeedSummary {
+        val speeds = lap.samples.map { (it.speedMps * 3.6f).toInt() }
+        val localMins = speeds.indices.filter { it in 1 until speeds.lastIndex && speeds[it] <= speeds[it - 1] && speeds[it] <= speeds[it + 1] }.map { speeds[it] }
+        val localMaxes = speeds.indices.filter { it in 1 until speeds.lastIndex && speeds[it] >= speeds[it - 1] && speeds[it] >= speeds[it + 1] }.map { speeds[it] }
+        return LapSpeedSummary(
+            speeds.maxOrNull() ?: 0, speeds.minOrNull() ?: 0,
+            localMins.minOrNull() ?: speeds.minOrNull() ?: 0,
+            localMaxes.maxOrNull() ?: speeds.maxOrNull() ?: 0
+        )
+    }
+
+    private fun lineFromLap(lap: RecordedLap): TimingLine {
+        val samples = lap.samples
+        val heading = if (samples.size >= 2) Geo.headingDeg(TrackPoint(samples[0].lat, samples[0].lon), TrackPoint(samples[1].lat, samples[1].lon)) else 0.0
+        return Geo.timingLine(TrackPoint(samples.first().lat, samples.first().lon), heading)
+    }
+
+    private fun saveLapAsTrack(session: SavedSession, lap: RecordedLap, finish: TimingLine, sectors: List<TimingLine>) {
+        val baseName = session.displayName.substringBefore(" · ").ifBlank { "Pista salvata" }
+        trackStore.save(SavedTrack("track_${System.currentTimeMillis()}", baseName, System.currentTimeMillis(), lap, finish, sectors))
+        status.text = "$baseName salvata come pista"
+        speak("Pista salvata. Verrà proposta quando sarai nelle vicinanze", flush = true)
+    }
+
     private fun showSessionAnalysis(session: SavedSession) {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -1194,6 +1324,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         private var downY = 0f
         private var startScroll = 0f
         private var dragged = false
+        private var tableDataTop = 0f
+        private var tableRowHeight = 0f
 
         override fun onDraw(canvas: Canvas) {
             canvas.drawColor(Color.rgb(3, 9, 14))
@@ -1204,6 +1336,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawText("${SimpleDateFormat("dd MMM yyyy  HH:mm", Locale.ITALIAN).format(Date(session.startedAtMs))} · ${if (session.simulated) "SIMULAZIONE" else "GPS"}", pad, dp(34).toFloat(), smallPaint)
             headerPaint.color = Color.rgb(72, 205, 255)
             headerPaint.textAlign = Paint.Align.RIGHT
+            canvas.drawText("+ PISTA", (width - dp(58)).toFloat(), dp(27).toFloat(), headerPaint)
             canvas.drawText("✕", width - pad, dp(27).toFloat(), headerPaint)
             headerPaint.textAlign = Paint.Align.LEFT
             headerPaint.color = Color.WHITE
@@ -1223,6 +1356,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             listOf("LAP", "TEMPO", "DELTA", "S1", "S2", "V MAX", "V MIN").forEachIndexed { index, label -> canvas.drawText(label, columns[index], tableTop + dp(17), smallPaint.apply { textAlign = Paint.Align.CENTER }) }
             val dataTop = headerBottom + dp(4)
             val rowHeight = dp(24).toFloat()
+            tableDataTop = dataTop
+            tableRowHeight = rowHeight
             val maxScroll = (session.laps.size * rowHeight - (height - dataTop - dp(8))).coerceAtLeast(0f)
             scroll = scroll.coerceIn(0f, maxScroll)
             session.laps.forEachIndexed { index, lap ->
@@ -1277,7 +1412,20 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     invalidate(); return true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!dragged && event.x > width - dp(90) && event.y < dp(50)) onClose()
+                    if (!dragged && event.x > width - dp(36) && event.y < dp(50)) onClose()
+                    else if (!dragged && event.x > width - dp(190) && event.y < dp(50)) {
+                        session.laps.minByOrNull { it.durationMs }?.let { lap ->
+                            val finish = session.timingLine ?: lineFromLap(lap)
+                            val sectors = session.sectorLines.ifEmpty { deriveSectors(lap.samples).map { it.line } }
+                            saveLapAsTrack(session, lap, finish, sectors)
+                        } ?: run {
+                            status.text = "Servono almeno un giro completo per salvare la pista"
+                        }
+                    }
+                    else if (!dragged && event.y >= tableDataTop && tableRowHeight > 0f) {
+                        val index = ((event.y - tableDataTop + scroll) / tableRowHeight).toInt()
+                        session.laps.getOrNull(index)?.let { showLapReview(session, it) }
+                    }
                     return true
                 }
             }
@@ -1286,6 +1434,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun resetSession(keepTrack: Boolean = false) {
+        // A selected saved circuit is a session reference, not data from the just-finished
+        // run. Preserve it when AVVIA prepares a new session.
+        val savedTrackToKeep = if (keepTrack) activeSavedTrack else null
+        if (!keepTrack) activeSavedTrack = null
         if (running) {
             val simulated = simulator != null
             val gpxName = saveCurrentSession()
@@ -1306,7 +1458,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         currentSectorTimes.clear()
         bestSectorSegmentMs.clear()
         pendingSectorBaseline.clear()
-        trackMap.setTrack(emptyList())
+        if (savedTrackToKeep == null) trackMap.setTrack(emptyList())
         bestLap = null
         predictor = null
         sectorReferences = emptyList()
@@ -1316,10 +1468,14 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         lastAnnouncedDeltaMs = null
         previousLiveDeltaMs = null
         deltaAnnouncementsSuppressedUntilMs = Long.MIN_VALUE
-        if (!keepTrack) timing.line = null
-        dashboard.setTimingLine(timing.line)
-        trackMap.setTimingLine(timing.line)
-        trackMap.setSectors(emptyList())
+        if (savedTrackToKeep != null) {
+            configureSavedTrack(savedTrackToKeep)
+        } else {
+            if (!keepTrack) timing.line = null
+            dashboard.setTimingLine(timing.line)
+            trackMap.setTimingLine(timing.line)
+            trackMap.setSectors(emptyList())
+        }
         lastLapMs = null
         lastBestReminderLap = 0
         dashboard.setLiveData(latestFix, null, null, 1, null, null, false)
