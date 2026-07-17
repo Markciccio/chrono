@@ -353,7 +353,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         val scroll = ScrollView(this).apply { addView(list) }
         val dialog = AlertDialog.Builder(this).setTitle("Elenco piste").setView(scroll).setNegativeButton("CHIUDI", null).create()
         tracks.forEach { track ->
-            val row = Button(this).apply {
+            val open = Button(this).apply {
                 text = "${track.name}\n${formatTime(track.lap.durationMs)} · ${track.sectors.size} settori"
                 textSize = 14f
                 gravity = Gravity.CENTER_VERTICAL
@@ -361,7 +361,32 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 background = hudPanel(Color.rgb(7, 24, 33), Color.rgb(28, 148, 190), 1)
                 setOnClickListener { dialog.dismiss(); showTrackEditor(track) }
             }
-            list.addView(row, LinearLayout.LayoutParams(-1, dp(58)).apply { setMargins(0, dp(3), 0, dp(3)) })
+            val delete = Button(this).apply {
+                text = "🗑"
+                textSize = 18f
+                contentDescription = "Elimina ${track.name}"
+                setTextColor(Color.rgb(255, 112, 112))
+                background = hudPanel(Color.rgb(37, 16, 22), Color.rgb(255, 91, 100), 1)
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Eliminare pista?")
+                        .setMessage(track.name)
+                        .setNegativeButton("ANNULLA", null)
+                        .setPositiveButton("ELIMINA") { _, _ ->
+                            trackStore.delete(track)
+                            if (activeSavedTrack?.id == track.id) useAutomaticFinish()
+                            dialog.dismiss()
+                            showTrackList()
+                        }
+                        .show()
+                }
+            }
+            list.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(3), 0, dp(3))
+                addView(open, LinearLayout.LayoutParams(0, dp(58), 1f))
+                addView(delete, LinearLayout.LayoutParams(dp(52), dp(58)).apply { setMargins(dp(5), 0, 0, 0) })
+            })
         }
         dialog.show()
     }
