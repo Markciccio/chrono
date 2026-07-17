@@ -436,14 +436,25 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             addSectorButton.isEnabled = sectorIndexes.size < 3
             removeSectorButton.isEnabled = selection >= 0
             markerButtons.removeAllViews()
-            fun markerButton(label: String, itemSelection: Int) = actionButton(if (selection == itemSelection) "● $label" else label) {
-                selection = itemSelection
-                redraw()
+            fun markerButton(label: String, itemSelection: Int, accent: Int) = Button(this@MainActivity).apply {
+                text = if (selection == itemSelection) "● $label" else label
+                textSize = 12f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                setTextColor(accent)
+                background = hudPanel(Color.rgb(7, 24, 33), accent, if (selection == itemSelection) 3 else 1)
+                setOnClickListener { selection = itemSelection; redraw() }
             }
-            markerButtons.addView(markerButton("TRAGUARDO", -1), LinearLayout.LayoutParams(0, dp(40), 1.35f).apply { rightMargin = dp(3) })
+            markerButtons.addView(markerButton("TRAGUARDO", -1, Color.rgb(255, 224, 0)), LinearLayout.LayoutParams(-1, dp(40)))
+            val sectorRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(3), 0, 0) }
             sectorIndexes.indices.forEach { index ->
-                markerButtons.addView(markerButton("S${index + 1}", index), LinearLayout.LayoutParams(0, dp(40), 1f).apply { if (index > 0) leftMargin = dp(3) })
+                val accent = when (index) {
+                    0 -> Color.rgb(255, 159, 28)
+                    1 -> Color.rgb(185, 131, 255)
+                    else -> Color.rgb(245, 98, 200)
+                }
+                sectorRow.addView(markerButton("S${index + 1}", index, accent), LinearLayout.LayoutParams(0, dp(40), 1f).apply { if (index > 0) leftMargin = dp(3) })
             }
+            markerButtons.addView(sectorRow, LinearLayout.LayoutParams(-1, dp(43)))
         }
         fun shiftAlongTrack(index: Int, direction: Int, targetDistanceM: Double = 1.0): Int {
             var result = index
@@ -494,8 +505,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         info.addView(actionButton("CHIUDI") { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(6) })
         selectedLabel = TextView(this).apply { textSize = 14f; setTextColor(Color.rgb(184, 223, 235)); setPadding(0, dp(14), 0, dp(10)) }
         info.addView(selectedLabel)
-        markerButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        info.addView(markerButtons, LinearLayout.LayoutParams(-1, dp(40)))
+        markerButtons = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        info.addView(markerButtons, LinearLayout.LayoutParams(-1, dp(83)))
         val moveRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         moveRow.addView(actionButton("− 1 m") { shiftMarker(-1) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(3) })
         moveRow.addView(actionButton("+ 1 m") { shiftMarker(1) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(3) })
