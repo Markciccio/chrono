@@ -1639,17 +1639,17 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val after = smooth.subList(index + 1, index + radius + 1)
             val value = smooth[index]
             val isMinimum = value <= before.minOrNull()!! && value <= after.minOrNull()!! &&
-                before.maxOrNull()!! - value >= 2f && after.maxOrNull()!! - value >= 2f
+                before.maxOrNull()!! - value >= 1f && after.maxOrNull()!! - value >= 1f
             val isMaximum = value >= before.maxOrNull()!! && value >= after.maxOrNull()!! &&
-                value - before.minOrNull()!! >= 2f && value - after.minOrNull()!! >= 2f
+                value - before.minOrNull()!! >= 1f && value - after.minOrNull()!! >= 1f
             if (isMinimum) candidates += Candidate(index, braking = true)
             if (isMaximum) candidates += Candidate(index, braking = false)
         }
-        // A flat GPS plateau can produce neighbouring extrema: retain one marker per 2.5 s.
+        // A flat GPS plateau can produce neighbouring extrema: retain one marker per 1.5 s.
         val selected = mutableListOf<Candidate>()
         candidates.forEach { candidate ->
             val previous = selected.lastOrNull()
-            if (previous == null || samples[candidate.index].timeMs - samples[previous.index].timeMs >= 2_500L) {
+            if (previous == null || samples[candidate.index].timeMs - samples[previous.index].timeMs >= 1_500L) {
                 selected += candidate
             } else {
                 val previousValue = smooth[previous.index]
@@ -1662,7 +1662,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         // the phone signal is too smooth to form a textbook local extremum.
         if (selected.none { it.braking }) selected += Candidate(smooth.indices.minByOrNull { smooth[it] }!!, braking = true)
         if (selected.none { !it.braking }) selected += Candidate(smooth.indices.maxByOrNull { smooth[it] }!!, braking = false)
-        return selected.distinctBy { it.index to it.braking }.sortedBy { it.index }.take(10).map { candidate ->
+        return selected.distinctBy { it.index to it.braking }.sortedBy { it.index }.take(16).map { candidate ->
             SpeedMarker(
                 TrackPoint(samples[candidate.index].lat, samples[candidate.index].lon),
                 smooth[candidate.index].toInt(),
