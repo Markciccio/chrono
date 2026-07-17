@@ -1610,7 +1610,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawText("${SimpleDateFormat("dd MMM yyyy  HH:mm", Locale.ITALIAN).format(Date(session.startedAtMs))} · ${if (session.simulated) "SIMULAZIONE" else "GPS"}", pad, dp(34).toFloat(), smallPaint)
             headerPaint.color = Color.rgb(72, 205, 255)
             headerPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("+ PISTA", (width - dp(58)).toFloat(), dp(27).toFloat(), headerPaint)
             canvas.drawText("✕", width - pad, dp(27).toFloat(), headerPaint)
             headerPaint.textAlign = Paint.Align.LEFT
             headerPaint.color = Color.WHITE
@@ -1687,15 +1686,6 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!dragged && event.x > width - dp(36) && event.y < dp(50)) onClose()
-                    else if (!dragged && event.x > width - dp(190) && event.y < dp(50)) {
-                        session.laps.filter { it.valid }.minByOrNull { it.durationMs }?.let { lap ->
-                            val finish = session.timingLine ?: lineFromLap(lap)
-                            val sectors = session.sectorLines.ifEmpty { deriveSectors(lap.samples).map { it.line } }
-                            saveLapAsTrack(session, lap, finish, sectors)
-                        } ?: run {
-                            status.text = "Servono almeno un giro completo per salvare la pista"
-                        }
-                    }
                     else if (!dragged && event.y >= tableDataTop && tableRowHeight > 0f) {
                         val index = ((event.y - tableDataTop + scroll) / tableRowHeight).toInt()
                         session.laps.getOrNull(index)?.let { showLapReview(session, it, onSessionUpdated) }
