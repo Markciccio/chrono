@@ -1170,7 +1170,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 dashboard.setSectorResult(event.number, event.elapsedMs, delta)
                 if (voiceBriefingMode != VoiceBriefingMode.LAPS_ONLY) {
                     sectorVoiceAnnouncementCount++
-                    val sectorCall = if (isSegmentRecord) "Fucsia. Settore ${event.number}" else "Settore ${event.number}"
+                    val sectorCall = if (isSegmentRecord) "Fucsia. ${spokenSectorName(event.number)}" else spokenSectorName(event.number)
                     val deltaPart = delta?.let {
                         ", ${spokenSectorDelta(it)}"
                     } ?: ""
@@ -2166,15 +2166,21 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     }
 
     private fun spokenDelta(ms: Long): String {
-        val state = if (ms < 0) "Avanti di" else "Sei dietro di"
+        val state = if (ms < 0) "Sei avanti di" else "Sei in ritardo di"
         return "$state ${spokenStopwatch(abs(ms))}"
     }
 
-    /** Compact sector call, e.g. "più 1.26 secondi". */
+    private fun spokenSectorName(number: Int) = when (number) {
+        1 -> "Settore uno"
+        2 -> "Settore centrale"
+        else -> "Settore $number"
+    }
+
+    /** Compact sector call with a natural, unambiguous delta. */
     private fun spokenSectorDelta(ms: Long): String {
-        val sign = if (ms < 0) "meno" else "più"
+        val state = if (ms < 0) "sei avanti di" else "sei in ritardo di"
         val amount = "%.2f".format(Locale.US, abs(ms) / 1_000.0)
-        return "$sign $amount secondi"
+        return "$state $amount secondi"
     }
 
     /** Concise radio timing: 0.22 -> "zero punto 22", 3.42 -> "tre e 42". */
