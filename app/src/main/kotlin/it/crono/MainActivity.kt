@@ -2403,7 +2403,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             labelPaint.textAlign = Paint.Align.RIGHT; labelPaint.textSize = timingTextSize(10)
             canvas.drawText("LAP", width - pad - dp(34), dp(13).toFloat(), labelPaint)
             primaryPaint.color = Color.WHITE; primaryPaint.textAlign = Paint.Align.RIGHT; primaryPaint.textSize = timingTextSize(28)
-            canvas.drawText("$lapNumber", width - pad, dp(26).toFloat(), primaryPaint)
+            canvas.drawText("$lapNumber", width - pad, dp(31).toFloat(), primaryPaint)
             if (recording) {
                 labelPaint.color = Color.rgb(255, 82, 92); labelPaint.textAlign = Paint.Align.CENTER
                 canvas.drawText("● REC", width * .66f, dp(20).toFloat(), labelPaint)
@@ -2426,7 +2426,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             canvas.drawText(bestText, bestRight, (dp(91) + largeOffset).toFloat(), bestPaint)
             bestLapNumber?.let { number ->
                 labelPaint.textAlign = Paint.Align.RIGHT; labelPaint.textSize = timingTextSize(10); labelPaint.color = Color.rgb(184, 223, 235)
-                canvas.drawText("LAP $number", bestRight - bestPaint.measureText(bestText) - dp(8), (dp(88) + largeOffset).toFloat(), labelPaint)
+                canvas.drawText("($number)", bestRight - bestPaint.measureText(bestText) - dp(8), (dp(88) + largeOffset).toFloat(), labelPaint)
             }
 
             val sectorHeaderTop = (dp(106) + largeOffset).toFloat()
