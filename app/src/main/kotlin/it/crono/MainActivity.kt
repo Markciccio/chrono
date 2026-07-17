@@ -264,25 +264,15 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     /** Keeps the telemetry visible while swallowing every accidental touch in a pocket. */
     private fun lockScreen() {
         if (screenLockOverlay != null) return
-        var downX = 0f
-        var downY = 0f
         screenLockOverlay = View(this).apply {
             // Nearly transparent on purpose: numbers stay readable, but no control receives taps.
             setBackgroundColor(Color.argb(8, 0, 0, 0))
             isClickable = true
-            setOnTouchListener { _, event ->
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> { downX = event.x; downY = event.y; true }
-                    MotionEvent.ACTION_UP -> {
-                        if (event.x - downX > dp(150) && abs(event.y - downY) < dp(90)) unlockScreen()
-                        true
-                    }
-                    else -> true
-                }
-            }
+            // Consume every touch: unlock is intentionally limited to physical volume keys.
+            setOnTouchListener { _, _ -> true }
         }
         addContentView(screenLockOverlay, ViewGroup.LayoutParams(-1, -1))
-        status.text = "🔒 SCHERMO BLOCCATO · scorri verso destra o premi un tasto volume"
+        status.text = "🔒 SCHERMO BLOCCATO · premi un tasto volume per sbloccare"
         speak("Schermo bloccato", flush = true)
     }
 
