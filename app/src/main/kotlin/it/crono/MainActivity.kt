@@ -1258,7 +1258,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 maxSpeedMps = sessionSamples.maxOfOrNull { it.speedMps },
                 minSpeedMps = sessionSamples.minOfOrNull { it.speedMps },
                 timingLine = timing.line,
-                sectorLines = timing.sectors
+                sectorLines = timing.sectors,
+                samples = sessionSamples.toList()
             )
         )
     }
@@ -1416,7 +1417,30 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private fun showSessionAnalysis(session: SavedSession) {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        dialog.setContentView(SessionAnalysisView(session) { dialog.dismiss() })
+        val allSamples = session.samples.ifEmpty { session.laps.flatMap { it.samples } }
+        val fallbackLap = session.laps.minByOrNull { it.durationMs }
+        val finish = session.timingLine ?: fallbackLap?.let(::lineFromLap)
+        val sectors = session.sectorLines.ifEmpty { fallbackLap?.let { deriveSectors(it.samples).map { sector -> sector.line } } ?: emptyList() }
+        val map = TrackMapView(this, ::handleTrackTap).apply {
+            setTrack(allSamples.map { TrackPoint(it.lat, it.lon) })
+            setTimingLine(finish)
+            setSectors(sectors)
+            postDelayed({ fitEntireTrack() }, 500)
+        }
+        val root = LinearLayout(this).apply {
+            orientation = if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setBackgroundColor(Color.rgb(3, 9, 14))
+        }
+        val analysis = SessionAnalysisView(session) { dialog.dismiss() }
+        if (root.orientation == LinearLayout.VERTICAL) {
+            root.addView(map, LinearLayout.LayoutParams(-1, 0, .34f).apply { bottomMargin = dp(6) })
+            root.addView(analysis, LinearLayout.LayoutParams(-1, 0, .66f))
+        } else {
+            root.addView(map, LinearLayout.LayoutParams(0, -1, .34f).apply { rightMargin = dp(6) })
+            root.addView(analysis, LinearLayout.LayoutParams(0, -1, .66f))
+        }
+        dialog.setContentView(root)
         dialog.show()
         dialog.window?.apply {
             setLayout(-1, -1)

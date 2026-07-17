@@ -23,7 +23,9 @@ data class SavedSession(
     val maxSpeedMps: Float? = null,
     val minSpeedMps: Float? = null,
     val timingLine: TimingLine? = null,
-    val sectorLines: List<TimingLine> = emptyList()
+    val sectorLines: List<TimingLine> = emptyList(),
+    /** Complete raw path, including warm-up/return-to-box portions and incomplete laps. */
+    val samples: List<GpsSample> = emptyList()
 )
 
 class SessionStore(context: Context) {
@@ -41,6 +43,12 @@ class SessionStore(context: Context) {
             put("minSpeedMps", session.minSpeedMps ?: JSONObject.NULL)
             put("timingLine", session.timingLine?.let(::lineJson) ?: JSONObject.NULL)
             put("sectorLines", JSONArray().apply { session.sectorLines.forEach { put(lineJson(it)) } })
+            put("samples", JSONArray().apply { session.samples.forEach { sample ->
+                put(JSONObject().apply {
+                    put("lat", sample.lat); put("lon", sample.lon); put("speed", sample.speedMps)
+                    put("accuracy", sample.accuracyM); put("time", sample.timeMs)
+                })
+            } })
             put("laps", JSONArray().apply {
                 session.laps.forEach { lap ->
                     put(JSONObject().apply {
@@ -94,6 +102,12 @@ class SessionStore(context: Context) {
                 samples
             )
         }
+        val sessionSamples = json.optJSONArray("samples")?.let { samplesJson ->
+            (0 until samplesJson.length()).map { sampleIndex ->
+                val sample = samplesJson.getJSONObject(sampleIndex)
+                GpsSample(sample.getDouble("lat"), sample.getDouble("lon"), sample.optDouble("speed").toFloat(), sample.optDouble("accuracy", 8.0).toFloat(), sample.getLong("time"))
+            }
+        } ?: emptyList()
         return SavedSession(
             json.getString("id"),
             json.optString("displayName", "Sessione"),
@@ -105,7 +119,8 @@ class SessionStore(context: Context) {
             if (json.isNull("maxSpeedMps")) null else json.optDouble("maxSpeedMps").toFloat(),
             if (json.isNull("minSpeedMps")) null else json.optDouble("minSpeedMps").toFloat(),
             json.optJSONObject("timingLine")?.let(::parseLine),
-            json.optJSONArray("sectorLines")?.let { lines -> (0 until lines.length()).map { parseLine(lines.getJSONObject(it)) } } ?: emptyList()
+            json.optJSONArray("sectorLines")?.let { lines -> (0 until lines.length()).map { parseLine(lines.getJSONObject(it)) } } ?: emptyList(),
+            sessionSamples
         )
     }
 
