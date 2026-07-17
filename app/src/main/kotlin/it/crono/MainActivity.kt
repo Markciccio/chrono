@@ -93,6 +93,8 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private var preferredVoiceName: String? = null
     private var voiceAlertIntervalMs = 10_000L
     private var voiceBriefingMode = VoiceBriefingMode.ALL
+    /** Adds the unit only occasionally: radio calls stay compact but never ambiguous. */
+    private var sectorVoiceAnnouncementCount = 0
     private val preferences by lazy { getSharedPreferences("pit_engineer_options", MODE_PRIVATE) }
     private var liveTimingSize = LiveTimingSize.STANDARD
     private var screenMode = ScreenMode.LANDSCAPE
@@ -1110,6 +1112,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 lastDeltaAnnouncementElapsedMs = Long.MIN_VALUE
                 lastAnnouncedDeltaMs = null
                 previousLiveDeltaMs = null
+                sectorVoiceAnnouncementCount = 0
                 currentSectorTimes.clear()
                 status.text = "Giro armato · BEST LAP non ancora disponibile"
                 speak("Cronometro armato", flush = true)
@@ -1132,11 +1135,14 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 lastAnnouncedDeltaMs = delta
                 previousLiveDeltaMs = delta
                 dashboard.setSectorResult(event.number, event.elapsedMs, delta)
-                val deltaPart = delta?.let { ". ${spokenDelta(it)}" } ?: ""
                 if (voiceBriefingMode != VoiceBriefingMode.LAPS_ONLY) {
-                    val recordPart = if (isSegmentRecord) ". ${sectorRecordMessage(event.number, segmentMs)}" else ""
+                    sectorVoiceAnnouncementCount++
                     val sectorCall = if (isSegmentRecord) "Fucsia. Settore ${event.number}" else "Settore ${event.number}"
-                    speak("$sectorCall. ${spokenTime(event.elapsedMs)}$deltaPart$recordPart", flush = true)
+                    val deltaPart = delta?.let {
+                        ", ${spokenSectorDelta(it, sectorVoiceAnnouncementCount % 3 == 0)}"
+                    } ?: ""
+                    // Do not read the sector time: the useful radio information here is its delta.
+                    speak("$sectorCall$deltaPart", flush = true)
                 }
                 // Sector calls always win over predictive-delta calls, including the samples just after it.
                 deltaAnnouncementsSuppressedUntilMs = (latestFix?.timeMs ?: System.currentTimeMillis()) + 3_000L
@@ -1970,6 +1976,13 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private fun spokenDelta(ms: Long): String {
         val state = if (ms < 0) "Avanti di" else "Sei dietro di"
         return "$state ${spokenStopwatch(abs(ms))}"
+    }
+
+    /** Compact sector call, e.g. "più 1.26". The unit is included every third call. */
+    private fun spokenSectorDelta(ms: Long, includeSeconds: Boolean): String {
+        val sign = if (ms < 0) "meno" else "più"
+        val amount = "%.2f".format(Locale.US, abs(ms) / 1_000.0)
+        return "$sign $amount${if (includeSeconds) " secondi" else ""}"
     }
 
     /** Concise radio timing: 0.22 -> "zero punto 22", 3.42 -> "tre e 42". */
