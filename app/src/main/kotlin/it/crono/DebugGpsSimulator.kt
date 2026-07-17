@@ -8,7 +8,7 @@ import kotlin.math.sin
 
 /**
  * Development-only GPS feed used to exercise the exact same timing pipeline
- * indoors. It draws a non-intersecting kart-style closed circuit around the latest real position,
+ * indoors. It draws a simple, non-intersecting oval around the latest real position,
  * emitting a point every 400 ms. Its centreline is scaled to 1.25 km;
  * the reference lap lasts about 90 seconds. Each later lap has a different average pace to make the live
  * delta and voice feedback observable.
@@ -23,35 +23,20 @@ class DebugGpsSimulator(
         private const val METERS_PER_LAT_DEG = 111_320.0
         private data class LocalPoint(val eastM: Double, val northM: Double)
         private const val TARGET_CIRCUIT_LENGTH_M = 1_250.0
-        // Autodrome-style test circuit: a long main straight, two chicanes, a fast sweeping
-        // top section and a final parabolica.  It is inspired by Monza's rhythm without
-        // pretending to reproduce its GPS geometry, and never crosses itself.
-        private val RAW_CIRCUIT = listOf(
-            LocalPoint(-35.0, -178.0), LocalPoint(135.0, -178.0), LocalPoint(225.0, -164.0),
-            LocalPoint(248.0, -128.0), LocalPoint(207.0, -100.0), LocalPoint(244.0, -64.0),
-            LocalPoint(230.0, -5.0), LocalPoint(186.0, 48.0), LocalPoint(168.0, 118.0),
-            LocalPoint(105.0, 170.0), LocalPoint(-72.0, 176.0), LocalPoint(-135.0, 148.0),
-            LocalPoint(-174.0, 92.0), LocalPoint(-148.0, 44.0), LocalPoint(-188.0, -2.0),
-            LocalPoint(-172.0, -58.0), LocalPoint(-128.0, -111.0), LocalPoint(-75.0, -139.0),
-            LocalPoint(-18.0, -132.0), LocalPoint(36.0, -96.0), LocalPoint(86.0, -119.0),
-            LocalPoint(66.0, -158.0), LocalPoint(16.0, -178.0)
-        )
         private fun lengthOf(points: List<LocalPoint>) = points.indices.sumOf { index ->
             val from = points[index]
             val to = points[(index + 1) % points.size]
             hypot(to.eastM - from.eastM, to.northM - from.northM)
         }
-        private fun smoothClosed(points: List<LocalPoint>) = points.indices.flatMap { index ->
-            val a = points[index]
-            val b = points[(index + 1) % points.size]
-            listOf(
-                LocalPoint(a.eastM * .75 + b.eastM * .25, a.northM * .75 + b.northM * .25),
-                LocalPoint(a.eastM * .25 + b.eastM * .75, a.northM * .25 + b.northM * .75)
-            )
-        }
-        private val CIRCUIT = smoothClosed(smoothClosed(RAW_CIRCUIT)).let { smoothed ->
-            val scale = TARGET_CIRCUIT_LENGTH_M / lengthOf(smoothed)
-            smoothed.map { LocalPoint(it.eastM * scale, it.northM * scale) }
+        // A clean ellipse is deliberately used for the indoor test: it cannot cross itself,
+        // has no chicanes that confuse the automatic finish-line detector, and remains easy to
+        // recognise on the map. The many points make the curve look smooth at GPS sample scale.
+        private val CIRCUIT = List(96) { index ->
+            val angle = 2.0 * PI * index / 96.0
+            LocalPoint(205.0 * cos(angle), 112.0 * sin(angle))
+        }.let { ellipse ->
+            val scale = TARGET_CIRCUIT_LENGTH_M / lengthOf(ellipse)
+            ellipse.map { LocalPoint(it.eastM * scale, it.northM * scale) }
         }
         private val CIRCUIT_LENGTH_M = lengthOf(CIRCUIT)
     }
@@ -104,12 +89,11 @@ class DebugGpsSimulator(
         timestampMs += STEP_MS
 
         val position = circuitPositionAt(distanceM)
-        // A low-frequency 3–4 m drift plus ~2 m point jitter resembles phone GPS
-        // much more closely than a mathematically perfect circle.
-        val driftEastM = 3.8 * sin(phase * 0.47 + 0.8)
-        val driftNorthM = 3.2 * cos(phase * 0.39 - 0.5)
-        val jitterEastM = nextNoise() * 1.8
-        val jitterNorthM = nextNoise() * 1.8
+        // Keep the simulated GPS imperfect, but small enough that the oval remains legible.
+        val driftEastM = 1.4 * sin(phase * 0.47 + 0.8)
+        val driftNorthM = 1.2 * cos(phase * 0.39 - 0.5)
+        val jitterEastM = nextNoise() * 0.9
+        val jitterNorthM = nextNoise() * 0.9
         val lat = origin.lat + (position.northM + driftNorthM + jitterNorthM) / METERS_PER_LAT_DEG
         val lon = origin.lon + (position.eastM + driftEastM + jitterEastM) / (METERS_PER_LAT_DEG * cos(Math.toRadians(origin.lat)))
         val reportedAccuracy = (4.5 + nextNoise().coerceAtLeast(-0.6) * 2.0).toFloat()
