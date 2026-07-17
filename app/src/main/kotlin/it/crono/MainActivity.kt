@@ -3001,6 +3001,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             lastPaint.textSize = timingTextSize(22); lastPaint.color = Color.rgb(238, 245, 247)
             val lastCenter = (pad + mid - gap) / 2f
             val currentCenter = (mid + gap + width - pad) / 2f
+            labelPaint.textSize = timingTextSize(13)
             canvas.drawText("LAST LAP", lastCenter, cardTop + dp(17), labelPaint)
             val lastValue = last
             val bestValue = best
@@ -3013,7 +3014,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             labelPaint.color = when { lastDelta == null -> Color.rgb(145, 164, 174); lastDelta == 0L -> green; else -> red }
             canvas.drawText(lastDelta?.let(::formatDelta) ?: "", lastCenter + lastPaint.measureText(lastText) / 2f - dp(7), cardBottom - dp(11), labelPaint)
             labelPaint.textAlign = Paint.Align.CENTER
-            labelPaint.textSize = timingTextSize(17)
+            labelPaint.textSize = timingTextSize(13)
             labelPaint.color = Color.rgb(112, 157, 174)
             canvas.drawText("CURRENT LAP", currentCenter, cardTop + dp(17), labelPaint)
             val currentText = elapsed?.let(::formatTime) ?: "--:--.---"
@@ -3039,16 +3040,16 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         }
 
         private fun drawClassicFooter(canvas: Canvas) {
-            val right = width - dp(14).toFloat(); val bottom = height - dp(14).toFloat(); val left = right - dp(118); val top = bottom - dp(38)
+            val right = width - dp(14).toFloat(); val bottom = height - dp(14).toFloat(); val left = right - dp(100); val top = bottom - dp(32)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(7, 31, 41) }
             canvas.drawRoundRect(left, top, right, bottom, dp(5).toFloat(), dp(5).toFloat(), paint)
             paint.style = Paint.Style.STROKE; paint.strokeWidth = dp(1).toFloat(); paint.color = Color.rgb(72, 205, 255)
             canvas.drawRoundRect(left, top, right, bottom, dp(5).toFloat(), dp(5).toFloat(), paint)
-            labelPaint.color = Color.rgb(72, 205, 255); labelPaint.textAlign = Paint.Align.CENTER; canvas.drawText("SESSIONI", (left + right) / 2f, top + dp(24), labelPaint)
-            val tracksRight = left - dp(7); val tracksLeft = tracksRight - dp(84)
+            labelPaint.color = Color.rgb(72, 205, 255); labelPaint.textAlign = Paint.Align.CENTER; labelPaint.textSize = timingTextSize(11); canvas.drawText("SESSIONI", (left + right) / 2f, top + dp(21), labelPaint)
+            val tracksRight = left - dp(6); val tracksLeft = tracksRight - dp(70)
             paint.style = Paint.Style.FILL; paint.color = Color.rgb(7, 31, 41); canvas.drawRoundRect(tracksLeft, top, tracksRight, bottom, dp(5).toFloat(), dp(5).toFloat(), paint)
             paint.style = Paint.Style.STROKE; paint.color = Color.rgb(174, 119, 255); canvas.drawRoundRect(tracksLeft, top, tracksRight, bottom, dp(5).toFloat(), dp(5).toFloat(), paint)
-            labelPaint.color = Color.rgb(174, 119, 255); canvas.drawText("PISTE", (tracksLeft + tracksRight) / 2f, top + dp(24), labelPaint)
+            labelPaint.color = Color.rgb(174, 119, 255); canvas.drawText("PISTE", (tracksLeft + tracksRight) / 2f, top + dp(21), labelPaint)
         }
 
         private fun drawSectorDashboardRow(
