@@ -23,18 +23,18 @@ class DebugGpsSimulator(
         private const val METERS_PER_LAT_DEG = 111_320.0
         private data class LocalPoint(val eastM: Double, val northM: Double)
         private const val TARGET_CIRCUIT_LENGTH_M = 1_250.0
-        // A compact kart circuit: main straight, hard braking zone, a flowing top complex,
-        // hairpin and an infield chicane.  The contour is deliberately asymmetric and
-        // non-intersecting so it resembles a real circuit rather than a geometric oval.
+        // Autodrome-style test circuit: a long main straight, two chicanes, a fast sweeping
+        // top section and a final parabolica.  It is inspired by Monza's rhythm without
+        // pretending to reproduce its GPS geometry, and never crosses itself.
         private val RAW_CIRCUIT = listOf(
-            LocalPoint(0.0, -150.0), LocalPoint(105.0, -150.0), LocalPoint(155.0, -120.0),
-            LocalPoint(170.0, -58.0), LocalPoint(136.0, -12.0), LocalPoint(150.0, 52.0),
-            LocalPoint(108.0, 118.0), LocalPoint(50.0, 92.0), LocalPoint(12.0, 142.0),
-            LocalPoint(-58.0, 136.0), LocalPoint(-112.0, 100.0), LocalPoint(-88.0, 54.0),
-            LocalPoint(-148.0, 25.0), LocalPoint(-166.0, -40.0), LocalPoint(-130.0, -102.0),
-            LocalPoint(-76.0, -86.0), LocalPoint(-52.0, -132.0), LocalPoint(4.0, -112.0),
-            LocalPoint(46.0, -66.0), LocalPoint(7.0, -32.0), LocalPoint(-36.0, -56.0),
-            LocalPoint(-60.0, -110.0), LocalPoint(-26.0, -145.0)
+            LocalPoint(-35.0, -178.0), LocalPoint(135.0, -178.0), LocalPoint(225.0, -164.0),
+            LocalPoint(248.0, -128.0), LocalPoint(207.0, -100.0), LocalPoint(244.0, -64.0),
+            LocalPoint(230.0, -5.0), LocalPoint(186.0, 48.0), LocalPoint(168.0, 118.0),
+            LocalPoint(105.0, 170.0), LocalPoint(-72.0, 176.0), LocalPoint(-135.0, 148.0),
+            LocalPoint(-174.0, 92.0), LocalPoint(-148.0, 44.0), LocalPoint(-188.0, -2.0),
+            LocalPoint(-172.0, -58.0), LocalPoint(-128.0, -111.0), LocalPoint(-75.0, -139.0),
+            LocalPoint(-18.0, -132.0), LocalPoint(36.0, -96.0), LocalPoint(86.0, -119.0),
+            LocalPoint(66.0, -158.0), LocalPoint(16.0, -178.0)
         )
         private fun lengthOf(points: List<LocalPoint>) = points.indices.sumOf { index ->
             val from = points[index]

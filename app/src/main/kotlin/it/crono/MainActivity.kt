@@ -1172,7 +1172,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                     sectorVoiceAnnouncementCount++
                     val sectorCall = if (isSegmentRecord) "Fucsia. Settore ${event.number}" else "Settore ${event.number}"
                     val deltaPart = delta?.let {
-                        ", ${spokenSectorDelta(it, sectorVoiceAnnouncementCount % 3 == 0)}"
+                        ", ${spokenSectorDelta(it)}"
                     } ?: ""
                     // Do not read the sector time: the useful radio information here is its delta.
                     speak("$sectorCall$deltaPart", flush = true)
@@ -1494,7 +1494,13 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
     private inner class SpeedComparisonView(lap: RecordedLap, bestLap: RecordedLap) : View(this@MainActivity) {
         private val lapProfile = speedProfile(lap)
         private val bestProfile = speedProfile(bestLap)
+        private val lapElapsedProfile = elapsedProfile(lap)
+        private val bestElapsedProfile = elapsedProfile(bestLap)
+        private val deltaProfile = lapElapsedProfile.indices.map { index ->
+            lapElapsedProfile[index] - (bestElapsedProfile.getOrNull(index) ?: 0L)
+        }
         private val maxSpeed = maxOf(lapProfile.maxOrNull() ?: 1f, bestProfile.maxOrNull() ?: 1f, 10f)
+        private val maxDelta = maxOf(deltaProfile.maxOfOrNull { abs(it) } ?: 100L, 100L)
         private val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(232, 3, 8, 13) }
         private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(180, 194, 205); style = Paint.Style.STROKE; strokeWidth = dp(1).toFloat() }
         private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(55, 72, 82); strokeWidth = dp(1).toFloat() }
@@ -1510,25 +1516,62 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             val chartLeft = dp(if (expanded) 34 else 12).toFloat()
             val chartRight = width - dp(if (expanded) 28 else 8).toFloat()
             val chartTop = dp(if (expanded) 82 else 29).toFloat()
-            val chartBottom = height - dp(if (expanded) 55 else 17).toFloat()
+            val chartBottom = if (expanded) height * .48f else height - dp(17).toFloat()
             (0..3).forEach { index ->
                 val y = chartTop + (chartBottom - chartTop) * index / 3f
                 canvas.drawLine(chartLeft, y, chartRight, y, gridPaint)
             }
             titlePaint.textSize = dp(if (expanded) 20 else 10).toFloat()
             canvas.drawText("VELOCITÀ / DISTANZA", inset + dp(5), dp(if (expanded) 30 else 14).toFloat(), titlePaint)
-            titlePaint.color = bestPaint.color
-            canvas.drawText("— BEST LAP", width - dp(if (expanded) 220 else 95).toFloat(), dp(if (expanded) 30 else 14).toFloat(), titlePaint)
-            titlePaint.color = lapPaint.color
-            canvas.drawText("— GIRO ATTUALE", width - dp(if (expanded) 120 else 43).toFloat(), dp(if (expanded) 30 else 14).toFloat(), titlePaint)
             titlePaint.color = Color.WHITE
             titlePaint.textSize = dp(if (expanded) 14 else 8).toFloat()
-            canvas.drawText("0%", chartLeft, height - dp(if (expanded) 18 else 5).toFloat(), titlePaint)
+            canvas.drawText("0%", chartLeft, chartBottom + dp(if (expanded) 18 else 12), titlePaint)
             titlePaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("100%", chartRight, height - dp(if (expanded) 18 else 5).toFloat(), titlePaint)
+            canvas.drawText("100%", chartRight, chartBottom + dp(if (expanded) 18 else 12), titlePaint)
             titlePaint.textAlign = Paint.Align.LEFT
             drawProfile(canvas, bestProfile, chartLeft, chartRight, chartTop, chartBottom, bestPaint)
             drawProfile(canvas, lapProfile, chartLeft, chartRight, chartTop, chartBottom, lapPaint)
+            if (expanded) drawDeltaChart(canvas, chartLeft, chartRight)
+            drawLegend(canvas, expanded)
+        }
+
+        private fun drawDeltaChart(canvas: Canvas, left: Float, right: Float) {
+            val top = height * .62f
+            val bottom = height - dp(54).toFloat()
+            val middle = (top + bottom) / 2f
+            (0..4).forEach { index ->
+                val y = top + (bottom - top) * index / 4f
+                canvas.drawLine(left, y, right, y, gridPaint)
+            }
+            val zeroPaint = Paint(gridPaint).apply { color = Color.rgb(220, 230, 235); strokeWidth = dp(1).toFloat() }
+            canvas.drawLine(left, middle, right, middle, zeroPaint)
+            titlePaint.color = Color.WHITE; titlePaint.textSize = dp(20).toFloat(); titlePaint.textAlign = Paint.Align.LEFT
+            canvas.drawText("DELTA VS BEST / DISTANZA", dp(10).toFloat(), top - dp(14), titlePaint)
+            titlePaint.textSize = dp(12).toFloat(); titlePaint.color = Color.rgb(0, 232, 31)
+            canvas.drawText("GUADAGNO", dp(10).toFloat(), top + dp(15), titlePaint)
+            titlePaint.color = Color.rgb(255, 61, 72)
+            canvas.drawText("PERDITA", dp(10).toFloat(), bottom - dp(8), titlePaint)
+            if (deltaProfile.size < 2) return
+            deltaProfile.indices.drop(1).forEach { index ->
+                val x1 = left + (right - left) * (index - 1) / (deltaProfile.size - 1).toFloat()
+                val x2 = left + (right - left) * index / (deltaProfile.size - 1).toFloat()
+                val y1 = middle + (bottom - top) * .42f * (deltaProfile[index - 1].toFloat() / maxDelta).coerceIn(-1f, 1f)
+                val y2 = middle + (bottom - top) * .42f * (deltaProfile[index].toFloat() / maxDelta).coerceIn(-1f, 1f)
+                val color = if ((deltaProfile[index - 1] + deltaProfile[index]) <= 0L) Color.rgb(0, 232, 31) else Color.rgb(255, 61, 72)
+                canvas.drawLine(x1, y1, x2, y2, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color; strokeWidth = dp(3).toFloat() })
+            }
+        }
+
+        private fun drawLegend(canvas: Canvas, expanded: Boolean) {
+            val y = height - dp(if (expanded) 20 else 5).toFloat()
+            titlePaint.textSize = dp(if (expanded) 15 else 8).toFloat(); titlePaint.textAlign = Paint.Align.LEFT
+            titlePaint.color = lapPaint.color; canvas.drawText("— GIRO ANALIZZATO", dp(12).toFloat(), y, titlePaint)
+            titlePaint.color = bestPaint.color; canvas.drawText("— BEST LAP", width * .43f, y, titlePaint)
+            if (expanded) {
+                titlePaint.color = Color.LTGRAY
+                canvas.drawText("Linea bianca = zero delta", width * .70f, y, titlePaint)
+            }
+            titlePaint.color = Color.WHITE
         }
 
         private fun drawProfile(canvas: Canvas, profile: List<Float>, left: Float, right: Float, top: Float, bottom: Float, paint: Paint) {
@@ -1558,6 +1601,26 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
                 val length = (distance[segment] - distance[previous]).takeIf { it > .01 } ?: 1.0
                 val fraction = ((target - distance[previous]) / length).coerceIn(0.0, 1.0)
                 ((source[previous].speedMps.toDouble() + (source[segment].speedMps - source[previous].speedMps).toDouble() * fraction) * 3.6).toFloat()
+            }
+        }
+
+        /** Elapsed time sampled at equal distance intervals, used for the lower delta trace. */
+        private fun elapsedProfile(lap: RecordedLap, samples: Int = 72): List<Long> {
+            val source = lap.samples
+            if (source.size < 2) return emptyList()
+            val distance = DoubleArray(source.size)
+            for (index in 1 until source.size) {
+                distance[index] = distance[index - 1] + Geo.distanceM(source[index - 1].lat, source[index - 1].lon, source[index].lat, source[index].lon)
+            }
+            val total = distance.last().takeIf { it > .5 } ?: return emptyList()
+            var segment = 1
+            return List(samples) { step ->
+                val target = total * step / (samples - 1).toDouble()
+                while (segment < distance.lastIndex && distance[segment] < target) segment++
+                val previous = (segment - 1).coerceAtLeast(0)
+                val length = (distance[segment] - distance[previous]).takeIf { it > .01 } ?: 1.0
+                val fraction = ((target - distance[previous]) / length).coerceIn(0.0, 1.0)
+                (source[previous].timeMs.toDouble() + (source[segment].timeMs - source[previous].timeMs).toDouble() * fraction).toLong() - source.first().timeMs
             }
         }
     }
@@ -1623,7 +1686,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         info.addView(actionButton("ANALISI INGEGNERE") {
             showEngineerAnalysis(session, lap, sectors)
         }, LinearLayout.LayoutParams(-1, dp(44)))
-        info.addView(actionButton("CONFRONTO VELOCITÀ") {
+        info.addView(actionButton("GRAFICO CONFRONTO VELOCITÀ") {
             showSpeedComparison(session, lap)
         }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
         info.addView(actionButton(if (lap.valid) "GIRO NON VALIDO" else "RIPRISTINA GIRO") {
@@ -2107,11 +2170,11 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         return "$state ${spokenStopwatch(abs(ms))}"
     }
 
-    /** Compact sector call, e.g. "più 1.26". The unit is included every third call. */
-    private fun spokenSectorDelta(ms: Long, includeSeconds: Boolean): String {
+    /** Compact sector call, e.g. "più 1.26 secondi". */
+    private fun spokenSectorDelta(ms: Long): String {
         val sign = if (ms < 0) "meno" else "più"
         val amount = "%.2f".format(Locale.US, abs(ms) / 1_000.0)
-        return "$sign $amount${if (includeSeconds) " secondi" else ""}"
+        return "$sign $amount secondi"
     }
 
     /** Concise radio timing: 0.22 -> "zero punto 22", 3.42 -> "tre e 42". */
@@ -2124,10 +2187,10 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         return when {
             minutes > 0 -> {
                 val minuteText = if (minutes == 1L) "un minuto" else "$minutes minuti"
-                "$minuteText, $seconds e $centsText"
+                "$minuteText, $seconds secondi e $centsText centesimi"
             }
-            seconds == 0L -> "zero punto $centsText"
-            else -> "$seconds e $centsText"
+            seconds == 0L -> "zero punto $centsText secondi"
+            else -> "$seconds secondi e $centsText centesimi"
         }
     }
 
