@@ -2287,6 +2287,7 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
         fun clearSectorResult() { sectorResults.clear(); invalidate() }
 
         override fun onDraw(canvas: Canvas) {
+            if (drawClassicDashboard(canvas)) return
             canvas.drawColor(Color.rgb(4, 5, 8))
             val margin = dp(9).toFloat()
             val green = Color.rgb(0, 238, 18)
@@ -2362,6 +2363,92 @@ class MainActivity : Activity(), LocationListener, TextToSpeech.OnInitListener {
             labelPaint.color = Color.rgb(174, 119, 255)
             canvas.drawText("PISTE", (tracksLeft + tracksRight) / 2f, sessionsTop + dp(24), labelPaint)
 
+        }
+
+        /** Original blue F1-style home HUD, retained as the live-driving dashboard. */
+        private fun drawClassicDashboard(canvas: Canvas): Boolean {
+            canvas.drawColor(Color.rgb(5, 16, 23))
+            val pad = dp(12).toFloat()
+            val red = Color.rgb(238, 50, 62)
+            val green = Color.rgb(69, 223, 123)
+            val panel = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(20, 28, 39) }
+            val dark = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(12, 19, 29) }
+            val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = red }
+            val largeOffset = if (liveTimingScale > 1f) dp((10f + (liveTimingScale - 1f) * 45f).toInt()) else 0
+            val rowText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = timingTextSize(17); typeface = Typeface.DEFAULT_BOLD }
+            val valueText = Paint(rowText).apply { textAlign = Paint.Align.RIGHT; textSize = timingTextSize(23) }
+
+            canvas.drawRect(0f, 0f, width.toFloat(), dp(28).toFloat(), dark)
+            canvas.drawRect(0f, 0f, dp(6).toFloat(), dp(28).toFloat(), accent)
+            labelPaint.color = Color.rgb(218, 229, 235); labelPaint.textAlign = Paint.Align.LEFT
+            canvas.drawText("PIT ENGINEER  //  LIVE TIMING", pad + dp(8), dp(20).toFloat(), labelPaint)
+            labelPaint.textAlign = Paint.Align.RIGHT
+            canvas.drawText("GIRO $lapNumber", width - pad, dp(20).toFloat(), labelPaint)
+            if (recording) {
+                labelPaint.color = Color.rgb(255, 82, 92); labelPaint.textAlign = Paint.Align.CENTER
+                canvas.drawText("● REC", width * .66f, dp(20).toFloat(), labelPaint)
+            }
+
+            val deltaBottom = (dp(98) + largeOffset).toFloat()
+            canvas.drawRoundRect(pad, dp(38).toFloat(), width - pad, deltaBottom, dp(4).toFloat(), dp(4).toFloat(), panel)
+            canvas.drawRect(pad, dp(38).toFloat(), pad + dp(6), deltaBottom, accent)
+            labelPaint.color = Color.rgb(112, 157, 174); labelPaint.textAlign = Paint.Align.LEFT
+            canvas.drawText("DELTA vs BEST LAP", pad + dp(18), (if (largeOffset > 0) dp(55) else dp(58)).toFloat(), labelPaint)
+            val liveDelta = delta
+            deltaPaint.color = when { liveDelta == null -> Color.LTGRAY; liveDelta < 0 -> green; else -> red }
+            deltaPaint.textAlign = Paint.Align.LEFT; deltaPaint.textSize = timingTextSize(42)
+            canvas.drawText(liveDelta?.let { if (it < 0) "▲ ${formatDelta(it)}" else "▼ ${formatDelta(it)}" } ?: "± 0.00", pad + dp(18), (dp(91) + largeOffset).toFloat(), deltaPaint)
+            labelPaint.textAlign = Paint.Align.RIGHT
+            canvas.drawText("BEST LAP", width - pad - dp(18), (if (largeOffset > 0) dp(55) else dp(58)).toFloat(), labelPaint)
+            bestPaint.color = green; bestPaint.textAlign = Paint.Align.RIGHT; bestPaint.textSize = timingTextSize(36)
+            canvas.drawText(best?.let(::formatTime) ?: "--:--.---", width - pad - dp(18), (dp(91) + largeOffset).toFloat(), bestPaint)
+
+            val sectorHeaderTop = (dp(106) + largeOffset).toFloat()
+            canvas.drawRect(pad, sectorHeaderTop, width - pad, sectorHeaderTop + dp(22), dark)
+            labelPaint.textAlign = Paint.Align.LEFT; canvas.drawText("SECTOR", pad + dp(12), sectorHeaderTop + dp(17), labelPaint)
+            labelPaint.textAlign = Paint.Align.RIGHT; canvas.drawText("TEMPO / DELTA", width - pad - dp(12), sectorHeaderTop + dp(17), labelPaint)
+            drawClassicSectorRow(canvas, sectorHeaderTop + dp(24), "S1", sectorResults[1], Color.rgb(70, 205, 255), rowText, valueText, panel)
+            drawClassicSectorRow(canvas, sectorHeaderTop + dp(63), "S2", sectorResults[2], Color.rgb(255, 185, 64), rowText, valueText, dark)
+
+            val cardTop = sectorHeaderTop + dp(104)
+            val cardBottom = cardTop + dp(if (largeOffset > 0) 65 else 68)
+            val gap = dp(7).toFloat(); val mid = width / 2f
+            canvas.drawRoundRect(pad, cardTop, mid - gap, cardBottom, dp(4).toFloat(), dp(4).toFloat(), dark)
+            canvas.drawRoundRect(mid + gap, cardTop, width - pad, cardBottom, dp(4).toFloat(), dp(4).toFloat(), panel)
+            canvas.drawRect(pad, cardTop, pad + dp(5), cardBottom, Paint().apply { color = Color.WHITE })
+            canvas.drawRect(mid + gap, cardTop, mid + gap + dp(5), cardBottom, Paint().apply { color = green })
+            labelPaint.textAlign = Paint.Align.CENTER; labelPaint.color = Color.rgb(112, 157, 174)
+            lastPaint.textSize = timingTextSize(22); lastPaint.color = Color.rgb(238, 245, 247)
+            canvas.drawText("LAST LAP", (pad + mid - gap) / 2f, cardTop + dp(17), labelPaint)
+            canvas.drawText(last?.let(::formatTime) ?: "--:--.---", (pad + mid - gap) / 2f, cardBottom - dp(10), lastPaint)
+            canvas.drawText("CURRENT LAP", (mid + gap + width - pad) / 2f, cardTop + dp(17), labelPaint)
+            canvas.drawText(elapsed?.let(::formatTime) ?: "--:--.---", (mid + gap + width - pad) / 2f, cardBottom - dp(10), lastPaint)
+            drawClassicFooter(canvas)
+            canvas.drawRoundRect(dp(2).toFloat(), dp(2).toFloat(), width - dp(2).toFloat(), height - dp(2).toFloat(), dp(9).toFloat(), dp(9).toFloat(), hudStrokePaint)
+            return true
+        }
+
+        private fun drawClassicSectorRow(canvas: Canvas, top: Float, name: String, result: SectorDisplay?, accent: Int, namePaint: Paint, valuePaint: Paint, background: Paint) {
+            val pad = dp(12).toFloat()
+            canvas.drawRect(pad, top, width - pad, top + dp(35), background)
+            canvas.drawRect(pad, top, pad + dp(5), top + dp(35), Paint().apply { color = accent })
+            namePaint.textAlign = Paint.Align.LEFT; canvas.drawText(name, pad + dp(17), top + dp(25), namePaint)
+            valuePaint.color = accent
+            val value = result?.let { "${formatTime(it.elapsedMs)} ${it.deltaMs?.let(::formatDelta) ?: ""}".trim() } ?: "--:--.---"
+            canvas.drawText(value, width - pad - dp(14), top + dp(26), valuePaint)
+        }
+
+        private fun drawClassicFooter(canvas: Canvas) {
+            val right = width - dp(14).toFloat(); val bottom = height - dp(14).toFloat(); val left = right - dp(118); val top = bottom - dp(38)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(7, 31, 41) }
+            canvas.drawRoundRect(left, top, right, bottom, dp(5).toFloat(), dp(5).toFloat(), paint)
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = dp(1).toFloat(); paint.color = Color.rgb(72, 205, 255)
+            canvas.drawRoundRect(left, top, right, bottom, dp(5).toFloat(), dp(5).toFloat(), paint)
+            labelPaint.color = Color.rgb(72, 205, 255); labelPaint.textAlign = Paint.Align.CENTER; canvas.drawText("SESSIONI", (left + right) / 2f, top + dp(24), labelPaint)
+            val tracksRight = left - dp(7); val tracksLeft = tracksRight - dp(84)
+            paint.style = Paint.Style.FILL; paint.color = Color.rgb(7, 31, 41); canvas.drawRoundRect(tracksLeft, top, tracksRight, bottom, dp(5).toFloat(), dp(5).toFloat(), paint)
+            paint.style = Paint.Style.STROKE; paint.color = Color.rgb(174, 119, 255); canvas.drawRoundRect(tracksLeft, top, tracksRight, bottom, dp(5).toFloat(), dp(5).toFloat(), paint)
+            labelPaint.color = Color.rgb(174, 119, 255); canvas.drawText("PISTE", (tracksLeft + tracksRight) / 2f, top + dp(24), labelPaint)
         }
 
         private fun drawSectorDashboardRow(
